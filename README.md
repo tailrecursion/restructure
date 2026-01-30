@@ -19,6 +19,7 @@ If you are touching a few nested spots in a known shape, plain Clojure is alread
 
 (over [{_ [{_ n}]} data]
   {n (cond-> n (even? n) inc)})
+
 ;; => {:a [{:aa 1 :bb 3} {:cc 3}]
 ;;     :b [{:dd 5}]}
 ```
@@ -44,6 +45,7 @@ Plain Clojure:
 (over [{_ {:keys [active email] :as u}} users]
   {u?    active
    email (str/lower-case email)})
+
 ;; => {:alice {:active true :email "alice@example.com"}
 ;;     :cara  {:active true :email "cara@example.com"}}
 ```
@@ -71,6 +73,7 @@ Plain Clojure:
        [{:keys [sku] :as line}] lines]
   {line? (seq sku)
    line  (update line :qty (fnil int 0))})
+
 ;; => {:id 42
 ;;     :lines [{:sku "A" :qty 2}
 ;;             {:sku "B" :qty 0}]}
@@ -99,6 +102,7 @@ Plain Clojure:
 (mapv #(over [{k _} %]
          {k (get rename k k)})
       rows)
+
 ;; => [{:user/id 1 :user/email "a@x.com" :status :active}
 ;;     {:user/id 2 :user/email "b@x.com" :status :disabled}]
 ```
