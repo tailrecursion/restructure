@@ -36,18 +36,6 @@
                     {:sku "B" :qty 0}]}
            out))))
 
-(deftest readme-example-4
-  (let [rename {:usr/id :user/id
-                :usr/email :user/email}
-        rows [{:usr/id 1 :usr/email "a@x.com" :status :active}
-              {:usr/id 2 :usr/email "b@x.com" :status :disabled}]
-        out (mapv #(over [{k _} %]
-                     {k (get rename k k)})
-                  rows)]
-    (is (= [{:user/id 1 :user/email "a@x.com" :status :active}
-            {:user/id 2 :user/email "b@x.com" :status :disabled}]
-           out))))
-
 (deftest example-2
   (let [users
         {:alice {:active true  :email "ALICE@EXAMPLE.COM" :phones ["111" "" "222"] :tags #{:keep :old}}

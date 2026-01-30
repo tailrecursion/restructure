@@ -85,34 +85,6 @@ Plain Clojure:
                (mapv #(update % :qty (fnil int 0))))))
 ```
 
-### 4) Rename keys across a result set
-```clojure
-(def rename
-  {:usr/id :user/id
-   :usr/email :user/email})
-
-(def rows
-  [{:usr/id 1 :usr/email "a@x.com" :status :active}
-   {:usr/id 2 :usr/email "b@x.com" :status :disabled}])
-
-(mapv #(over [{k _} %]
-         {k (get rename k k)})
-      rows)
-
-;; => [{:user/id 1 :user/email "a@x.com" :status :active}
-;;     {:user/id 2 :user/email "b@x.com" :status :disabled}]
-```
-Rewrite map keys directly; `over` stays local to one row.
-
-Plain Clojure:
-```clojure
-(mapv #(reduce-kv (fn [m k v]
-                    (assoc m (get rename k k) v))
-                  {}
-                  %)
-      rows)
-```
-
 ## Selector semantics (query, not destructuring)
 
 A selector is a vector of alternating `pattern` and `source`:
