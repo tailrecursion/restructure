@@ -15,8 +15,6 @@ Rewrite nested Clojure data with a declared shape.
 
 ## Examples
 
-Examples below are covered by tests.
-
 ### 1) Update nested numbers without a full walk
 ```clojure
 (def data
