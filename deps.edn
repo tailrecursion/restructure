@@ -1,0 +1,3 @@
+{:paths ["src" "test"]
+ :aliases
+ {:test {:main-opts ["-e" "(require 'clojure.test)(require 'tailrecursion.restructure-test)(clojure.test/run-tests 'tailrecursion.restructure-test)"]}}}

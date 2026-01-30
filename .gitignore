@@ -1,0 +1,15 @@
+# Clojure / JVM
+/target/
+/.cpcache/
+/.nrepl-port
+/.repl
+/.cljs_node_repl/
+*.class
+
+# Tooling
+/.clj-kondo/.cache/
+/.lsp/
+
+# Editor / OS
+*~
+.DS_Store

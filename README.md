@@ -1,0 +1,205 @@
+# restructure
+
+Rewrite nested Clojure data with a declared shape.
+
+`over` compiles a selector and rewrite body into code in the style of `update`/`mapv`/`update-vals`, but keeps the shape in one place. It visits only what you select.
+
+## What problem does this solve?
+
+If you are touching a few nested spots in a known shape, plain Clojure is already great. When the plumbing gets repetitive and error-prone, `over` helps: spell the shape once, keep the rewrite logic nearby, and avoid a full `postwalk`.
+
+## Examples
+
+### 1) Update nested numbers without a full walk
+```clojure
+(def data
+  {:a [{:aa 1 :bb 2}
+       {:cc 3}]
+   :b [{:dd 4}]})
+
+(over [{_ [{_ n}]} data]
+  {n (cond-> n (even? n) inc)})
+;; => {:a [{:aa 1 :bb 3} {:cc 3}]
+;;     :b [{:dd 5}]}
+```
+Map + vector traversal with one binding.
+
+Plain Clojure:
+```clojure
+(update-vals data
+             #(mapv (fn [m]
+                      (update-vals m (fn [n] (cond-> n (even? n) inc))))
+                    %))
+```
+
+### 2) Filter map entries + normalize a field
+```clojure
+(require '[clojure.string :as str])
+
+(def users
+  {:alice {:active true  :email "ALICE@EXAMPLE.COM"}
+   :bob   {:active false :email "bob@example.com"}
+   :cara  {:active true  :email "CARA@EXAMPLE.COM"}})
+
+(over [{_ {:keys [active email] :as u}} users]
+  {u?    active
+   email (str/lower-case email)})
+;; => {:alice {:active true :email "alice@example.com"}
+;;     :cara  {:active true :email "cara@example.com"}}
+```
+Map-entry traversal with a guard (`u?`) to drop entries.
+
+Plain Clojure:
+```clojure
+(->> users
+     (reduce-kv (fn [m id u]
+                  (if (:active u)
+                    (assoc m id (update u :email str/lower-case))
+                    m))
+                {}))
+```
+
+### 3) Traverse a nested vector and drop bad items
+```clojure
+(def order
+  {:id 42
+   :lines [{:sku "A" :qty 2}
+           {:sku ""  :qty 1}
+           {:sku "B" :qty 0}]})
+
+(over [{:keys [lines]} order
+       [{:keys [sku] :as line}] lines]
+  {line? (seq sku)
+   line  (update line :qty (fnil int 0))})
+;; => {:id 42
+;;     :lines [{:sku "A" :qty 2}
+;;             {:sku "B" :qty 0}]}
+```
+Sequential traversal; each element can be rewritten or dropped.
+
+Plain Clojure:
+```clojure
+(update order :lines
+        (fn [lines]
+          (->> lines
+               (filter (comp seq :sku))
+               (mapv #(update % :qty (fnil int 0))))))
+```
+
+### 4) Rename keys across a result set
+```clojure
+(def rename
+  {:usr/id :user/id
+   :usr/email :user/email})
+
+(def rows
+  [{:usr/id 1 :usr/email "a@x.com" :status :active}
+   {:usr/id 2 :usr/email "b@x.com" :status :disabled}])
+
+(mapv #(over [{k _} %]
+         {k (get rename k k)})
+      rows)
+;; => [{:user/id 1 :user/email "a@x.com" :status :active}
+;;     {:user/id 2 :user/email "b@x.com" :status :disabled}]
+```
+Rewrite map keys directly; `over` stays local to one row.
+
+Plain Clojure:
+```clojure
+(mapv #(reduce-kv (fn [m k v]
+                    (assoc m (get rename k k) v))
+                  {}
+                  %)
+      rows)
+```
+
+## Selector semantics (query, not destructuring)
+
+A selector is a vector of alternating `pattern` and `source`:
+
+```clojure
+(over [pattern1 source1
+       pattern2 source2
+       ...]
+  body-map)
+```
+
+- The first `source` is the input expression.
+- Later sources must be previously bound symbols.
+- The selector looks like destructuring, but it is a **query**: it binds and traverses; it does not introduce locals the way Clojure destructuring does.
+
+### Supported patterns
+
+- **Map-entry traversal:** `{kpat vpat}`
+  - Requires a map value; iterates entries.
+  - `kpat` binds the key (no traversal). `vpat` may traverse.
+- **Sequential traversal:** `[pat]`
+  - Requires a sequential or set value; iterates elements.
+- **Plain symbol:** `sym`
+  - Binds the current value.
+- **Map destructuring form:** `{:keys [...], :strs [...], :as sym, :or {...}}`
+  - No traversal; binds keys and/or `:as`.
+  - Nested destructuring inside `:keys`/`:strs` is rejected.
+- **Records** are treated as maps and may come back as plain maps after rewrite.
+
+Unsupported or ambiguous patterns are rejected with `ex-info` including `:phase`, `:path`, and `:pattern`.
+
+## Rewrite/body semantics
+
+The body is a map from **target symbols** to expressions.
+
+- A key `x` rewrites the binding `x`.
+- A key `x?` is a **guard**. When false, the corresponding structural position is elided.
+
+Elision rules:
+- Map-entry traversal: false guard removes the entry.
+- Sequential traversal: false guard removes the element.
+- Map destructure key: false guard removes that key.
+- `:as` binding: false guard removes the whole element at that level.
+
+Traversal is post-order: children are processed before parents. Guards see post-child values.
+
+## Tradeoffs
+
+Plain Clojure is already a win when:
+- A couple of `update` calls are clearer than any DSL.
+- `update-vals` + `mapv` is easier to scan for simple shapes.
+
+`clojure.walk/postwalk` is better when:
+- You need full-tree traversal.
+- You don’t know the shape ahead of time.
+
+`over` fits when:
+- You have a known shape and want to touch a few nested spots.
+- You want the traversal shape and the rewrite adjacent.
+- You want compiled code that avoids full walks and keeps structural sharing.
+
+## Non-goals
+
+- Not a general tree rewriting engine.
+- Not a replacement for all data transformation.
+- Not arbitrary destructuring: selectors are queries, not local binding forms.
+- No `:let` or computed traversal paths.
+
+## API
+
+```clojure
+(over selector body)         ; => rewritten value
+(compile-over selector body) ; => fn of one argument
+(over-plan selector body)    ; => compiler plan data
+(explain selector body)      ; => same as over-plan
+```
+
+## Notes
+
+- `over-plan`/`explain` return the compiler plan as data. Useful for debugging.
+
+## Running tests
+
+```bash
+clojure -M:test
+```
+
+## License
+
+MIT
