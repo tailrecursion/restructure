@@ -1,5 +1,5 @@
 (ns tailrecursion.restructure
-  "A zero-dependency DSL compiler for destructuring-shaped query+rewrite." 
+  "Rewrite nested Clojure data with a declared shape." 
   (:require [clojure.string :as str]))
 
 (def ^:no-doc elide
