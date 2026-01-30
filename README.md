@@ -66,9 +66,9 @@ Plain Clojure:
            {:sku "B" :qty 0}]})
 
 (over [{:keys [lines]} order
-       [{:keys [sku] :as line}] lines]
+       [{:keys [sku qty] :as line}] lines]
   {line? (seq sku)
-   line  (update line :qty (fnil int 0))})
+   qty   (or qty 0)})
 
 ;; => {:id 42
 ;;     :lines [{:sku "A" :qty 2}
