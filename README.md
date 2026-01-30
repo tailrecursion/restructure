@@ -176,4 +176,4 @@ clojure -M:test
 
 ## License
 
-Apache-2.0 or MIT (your choice).
+MIT
