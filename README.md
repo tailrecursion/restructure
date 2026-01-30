@@ -4,7 +4,18 @@ Rewrite nested Clojure data with a declared shape.
 
 `over` compiles a selector and rewrite body into code in the style of `update`/`mapv`/`update-vals`, but keeps the shape in one place. It visits only what you select.
 
+## API
+
+```clojure
+(over selector body)         ; => rewritten value
+(compile-over selector body) ; => fn of one argument
+(over-plan selector body)    ; => compiler plan data
+(explain selector body)      ; => same as over-plan
+```
+
 ## Examples
+
+Examples below are covered by tests.
 
 ### 1) Update nested numbers without a full walk
 ```clojure
@@ -82,7 +93,7 @@ Plain Clojure:
         (fn [lines]
           (->> lines
                (filter (comp seq :sku))
-               (mapv #(update % :qty (fnil int 0))))))
+               (mapv #(update % :qty (fnil identity 0))))))
 ```
 
 ## Selector semantics (query, not destructuring)
@@ -153,15 +164,6 @@ Plain Clojure is already a win when:
 - Not arbitrary destructuring: selectors are queries, not local binding forms.
 - No `:let` or computed traversal paths.
 
-## API
-
-```clojure
-(over selector body)         ; => rewritten value
-(compile-over selector body) ; => fn of one argument
-(over-plan selector body)    ; => compiler plan data
-(explain selector body)      ; => same as over-plan
-```
-
 ## Notes
 
 - `over-plan`/`explain` return the compiler plan as data. Useful for debugging.
@@ -174,4 +176,4 @@ clojure -M:test
 
 ## License
 
-MIT
+Apache-2.0 or MIT (your choice).
