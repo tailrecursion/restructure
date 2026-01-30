@@ -4,10 +4,6 @@ Rewrite nested Clojure data with a declared shape.
 
 `over` compiles a selector and rewrite body into code in the style of `update`/`mapv`/`update-vals`, but keeps the shape in one place. It visits only what you select.
 
-## What problem does this solve?
-
-If you are touching a few nested spots in a known shape, plain Clojure is already great. When the plumbing gets repetitive and error-prone, `over` helps: spell the shape once, keep the rewrite logic nearby, and avoid a full `postwalk`.
-
 ## Examples
 
 ### 1) Update nested numbers without a full walk
