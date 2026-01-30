@@ -10,7 +10,6 @@ Rewrite nested Clojure data with a declared shape.
 (over selector body)         ; => rewritten value
 (compile-over selector body) ; => fn of one argument
 (over-plan selector body)    ; => compiler plan data
-(explain selector body)      ; => same as over-plan
 ```
 
 ## Examples
@@ -164,7 +163,7 @@ Plain Clojure is already a win when:
 
 ## Notes
 
-- `over-plan`/`explain` return the compiler plan as data. Useful for debugging.
+- `over-plan` returns the compiler plan as data. Useful for debugging.
 
 ## Running tests
 

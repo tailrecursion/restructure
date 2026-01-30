@@ -1,6 +1,6 @@
 (ns tailrecursion.restructure-test
   (:require [clojure.test :refer :all]
-            [tailrecursion.restructure :refer [over compile-over over-plan explain]]
+            [tailrecursion.restructure :refer [over compile-over over-plan]]
             [clojure.string :as str]))
 
 (deftest readme-example-1
@@ -127,52 +127,50 @@
 (deftest plan-introspection
   (let [plan (over-plan '[{_ n} ::input] '{n (inc n)})]
     (is (map? plan))
-    (is (contains? plan :bindings)))
-  (let [plan (explain '[{_ n} ::input] '{n (inc n)})]
-    (is (map? plan))))
+    (is (contains? plan :bindings))))
 
 (deftest invalid-body
   (is (thrown? clojure.lang.ExceptionInfo
-        (explain '[{_ n} ::input] '{x (inc 1)}))))
+        (over-plan '[{_ n} ::input] '{x (inc 1)}))))
 
 (deftest selector-errors
   (letfn [(exdata [f]
             (try (f) (catch clojure.lang.ExceptionInfo e (ex-data e))))]
-    (is (= :parse (:phase (exdata #(explain '{_ n} '{n n})))) )
-    (is (= :parse (:phase (exdata #(explain '[{_ n} ::input _] '{n n})))) )
-    (is (= :parse (:phase (exdata #(explain '[[a b] ::input] '{a a})))) )
-    (is (= :parse (:phase (exdata #(explain '[{{a b} ::input}] '{a a})))) )
-    (is (= :parse (:phase (exdata #(explain '[{[a] b} ::input] '{b b})))) )
-    (is (= :validate (:phase (exdata #(explain '[{_ n} x {y z} w] '{n n})))) )))
+    (is (= :parse (:phase (exdata #(over-plan '{_ n} '{n n})))) )
+    (is (= :parse (:phase (exdata #(over-plan '[{_ n} ::input _] '{n n})))) )
+    (is (= :parse (:phase (exdata #(over-plan '[[a b] ::input] '{a a})))) )
+    (is (= :parse (:phase (exdata #(over-plan '[{{a b} ::input}] '{a a})))) )
+    (is (= :parse (:phase (exdata #(over-plan '[{[a] b} ::input] '{b b})))) )
+    (is (= :validate (:phase (exdata #(over-plan '[{_ n} x {y z} w] '{n n})))) )))
 
 (deftest destructure-errors
   (letfn [(exdata [f]
             (try (f) (catch clojure.lang.ExceptionInfo e (ex-data e))))]
-    (is (= :parse (:phase (exdata #(explain '[{_ {:keys a}} ::input] '{a a})))) )
-    (is (= :parse (:phase (exdata #(explain '[{_ {:keys [a 1]}} ::input] '{a a})))) )
-    (is (= :parse (:phase (exdata #(explain '[{_ {:as 1}} ::input] '{a a})))) )
-    (is (= :parse (:phase (exdata #(explain '[{_ {:or 1}} ::input] '{a a})))) )
-    (is (= :parse (:phase (exdata #(explain '[{_ {:foo 1}} ::input] '{a a})))) )))
+    (is (= :parse (:phase (exdata #(over-plan '[{_ {:keys a}} ::input] '{a a})))) )
+    (is (= :parse (:phase (exdata #(over-plan '[{_ {:keys [a 1]}} ::input] '{a a})))) )
+    (is (= :parse (:phase (exdata #(over-plan '[{_ {:as 1}} ::input] '{a a})))) )
+    (is (= :parse (:phase (exdata #(over-plan '[{_ {:or 1}} ::input] '{a a})))) )
+    (is (= :parse (:phase (exdata #(over-plan '[{_ {:foo 1}} ::input] '{a a})))) )))
 
 (deftest body-errors
   (letfn [(exdata [f]
             (try (f) (catch clojure.lang.ExceptionInfo e (ex-data e))))]
-    (is (= :validate (:phase (exdata #(explain '[{_ n} ::input] '(n)))) ))
-    (is (= :validate (:phase (exdata #(explain '[{_ n} ::input] '{:k 1})))) )
-    (is (= :validate (:phase (exdata #(explain '[{_ n} ::input] '{a/b 1})))) )
-    (is (= :validate (:phase (exdata #(explain '[{_ n} ::input] '{m? true})))) )
-    (is (= :validate (:phase (exdata #(explain '[{_ n} ::input] '{m 1})))) )))
+    (is (= :validate (:phase (exdata #(over-plan '[{_ n} ::input] '(n)))) ))
+    (is (= :validate (:phase (exdata #(over-plan '[{_ n} ::input] '{:k 1})))) )
+    (is (= :validate (:phase (exdata #(over-plan '[{_ n} ::input] '{a/b 1})))) )
+    (is (= :validate (:phase (exdata #(over-plan '[{_ n} ::input] '{m? true})))) )
+    (is (= :validate (:phase (exdata #(over-plan '[{_ n} ::input] '{m 1})))) )))
 
 (deftest binding-errors
   (letfn [(exdata [f]
             (try (f) (catch clojure.lang.ExceptionInfo e (ex-data e))))]
-    (is (= :validate (:phase (exdata #(explain '[{k k} ::input] '{k k})))) )
-    (is (= :validate (:phase (exdata #(explain '[{_ n} ::input {n m} n] '{m m})))) )))
+    (is (= :validate (:phase (exdata #(over-plan '[{k k} ::input] '{k k})))) )
+    (is (= :validate (:phase (exdata #(over-plan '[{_ n} ::input {n m} n] '{m m})))) )))
 
 (deftest nested-destructure-errors-and-workaround
   (letfn [(exdata [f]
             (try (f) (catch clojure.lang.ExceptionInfo e (ex-data e))))]
-    (is (= :parse (:phase (exdata #(explain '[{_ {:keys [{:keys [email]}]}} ::input]
+    (is (= :parse (:phase (exdata #(over-plan '[{_ {:keys [{:keys [email]}]}} ::input]
                                        '{email email})))) ))
   (let [users {:alice {:profile {:email "A@EXAMPLE.COM"}}
                :bob   {:profile {:email "B@EXAMPLE.COM"}}}
@@ -196,8 +194,8 @@
 (deftest strs-destructure-errors
   (letfn [(exdata [f]
             (try (f) (catch clojure.lang.ExceptionInfo e (ex-data e))))]
-    (is (= :parse (:phase (exdata #(explain '[{_ {:strs a}} ::input] '{a a})))) )
-    (is (= :parse (:phase (exdata #(explain '[{_ {:strs [a 1]}} ::input] '{a a})))) )))
+    (is (= :parse (:phase (exdata #(over-plan '[{_ {:strs a}} ::input] '{a a})))) )
+    (is (= :parse (:phase (exdata #(over-plan '[{_ {:strs [a 1]}} ::input] '{a a})))) )))
 
 (deftest as-guard-elides-entry
   (let [data {:a {:x 1} :b {:x 0}}
@@ -296,7 +294,7 @@
 (deftest conflict-errors
   (letfn [(exdata [f]
             (try (f) (catch clojure.lang.ExceptionInfo e (ex-data e))))]
-    (is (= :validate (:phase (exdata #(explain '[{_ {:keys [a] :as m}} ::input]
+    (is (= :validate (:phase (exdata #(over-plan '[{_ {:keys [a] :as m}} ::input]
                                        '{a (inc a) m (assoc m :a 0)})))) )))
 
 (deftest root-elision

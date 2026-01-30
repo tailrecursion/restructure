@@ -581,8 +581,3 @@
   "Return the compiler plan for selector+body as data."
   [sel body]
   (plan-over* sel body))
-
-(defn explain
-  "Return a structured compilation plan (same as over-plan)." 
-  [sel body]
-  (plan-over* sel body))
