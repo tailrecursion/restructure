@@ -107,3 +107,40 @@
         sources (selector-source-nodes selector-node)
         wrapped (wrap-body body-node sources)]
     {:node (add-bindings wrapped bindings)}))
+
+(defn- method-arg-syms
+  [arglist]
+  (->> arglist
+       (mapcat (fn [arg]
+                 (cond
+                   (symbol? arg) [arg]
+                   (and (seq? arg) (symbol? (first arg))) [(first arg)]
+                   :else [])))))
+
+(defn defgeneric
+  [{:keys [node]}]
+  (let [form (api/sexpr node)
+        name (second form)]
+    {:node (api/list-node (list (api/token-node 'def)
+                                (api/token-node name)
+                                (api/token-node nil)))}))
+
+(defn defmethod
+  [{:keys [node]}]
+  (let [children (vec (:children node))
+        maybe-qual (nth children 2)
+        qual? (keyword? (api/sexpr maybe-qual))
+        arg-node (nth children (if qual? 3 2))
+        body-nodes (subvec children (if qual? 4 3))
+        arg-syms (method-arg-syms (api/sexpr arg-node))
+        bindings (api/vector-node
+                   (mapcat (fn [s] [(api/token-node s) (api/token-node nil)])
+                     arg-syms))
+        body (if (seq body-nodes) body-nodes [(api/token-node nil)])
+        wrapped (api/list-node
+                  (cons (api/token-node 'do)
+                        (concat body
+                                (map api/token-node arg-syms)
+                                [(api/token-node nil)])))
+        node (api/list-node (list (api/token-node 'let) bindings wrapped))]
+    {:node (with-meta node {:clj-kondo/ignore [:type-mismatch :unused-value]})}))
