@@ -1,6 +1,6 @@
 {:paths ["src" "test" "resources"]
  :aliases
- {:test {:main-opts ["-e" "(require 'clojure.test)(require 'tailrecursion.restructure-test)(require 'tailrecursion.restructure-clos-test)(clojure.test/run-tests 'tailrecursion.restructure-test 'tailrecursion.restructure-clos-test)"]}
+ {:test {:main-opts ["-e" "(require 'clojure.test)(require 'tailrecursion.restructure-test)(require 'tailrecursion.restructure-clos-test)(require 'tailrecursion.restructure-clos-demo-test)(clojure.test/run-tests 'tailrecursion.restructure-test 'tailrecursion.restructure-clos-test 'tailrecursion.restructure-clos-demo-test)"]}
   :lint {:extra-deps {clj-kondo/clj-kondo {:mvn/version "2026.01.19"}}
          :main-opts ["-m" "clj-kondo.main"]}
   :fmt {:extra-deps {zprint/zprint {:mvn/version "1.3.0"}}
@@ -11,6 +11,7 @@
                     "src/tailrecursion/restructure/clos.clj"
                     "test/tailrecursion/restructure_test.clj"
                     "test/tailrecursion/restructure_clos_test.clj"
+                    "test/tailrecursion/restructure_clos_demo_test.clj"
                     ".clj-kondo/tailrecursion/restructure/kondo.clj"
                     "resources/clj-kondo.exports/tailrecursion/restructure/tailrecursion/restructure/kondo.clj"]}
   :check {:extra-paths ["dev"]

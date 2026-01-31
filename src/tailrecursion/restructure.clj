@@ -35,6 +35,45 @@
   [coll out]
   (and (= (count coll) (count out)) (every? true? (map identical? coll out))))
 
+(clos/defgeneric traverse-seq*)
+
+(clos/defmethod traverse-seq* [(coll (pred set?)) f _path]
+  (let [out (reduce (fn [acc x]
+                      (let [y (f x)]
+                        (if (elide? y) acc (conj acc y))))
+              (empty coll)
+              coll)]
+    (if (= out coll) coll out)))
+
+(clos/defmethod traverse-seq* [(coll (pred vector?)) f _path]
+  (let [cnt (count coll)
+        out (loop [i 0
+                   acc (transient [])]
+              (if (< i cnt)
+                (let [x (nth coll i)
+                      y (f x)]
+                  (recur (inc i) (if (elide? y) acc (conj! acc y))))
+                (persistent! acc)))]
+    (if (unchanged-coll? coll out) coll out)))
+
+(clos/defmethod traverse-seq* [(coll (pred list?)) f _path]
+  (let [outv (reduce (fn [acc x]
+                       (let [y (f x)]
+                         (if (elide? y) acc (conj acc y))))
+               []
+               coll)
+        out (apply list outv)]
+    (if (unchanged-coll? coll outv) coll out)))
+
+(clos/defmethod traverse-seq* [(coll (pred seq?)) f _path]
+  (let [outv (reduce (fn [acc x]
+                       (let [y (f x)]
+                         (if (elide? y) acc (conj acc y))))
+               []
+               coll)
+        out (seq outv)]
+    (if (unchanged-coll? coll outv) coll out)))
+
 (defn ^:no-doc traverse-seq
   "Traverse a sequential or set, applying f to each element.
    f returns elide to remove an element."
@@ -43,29 +82,7 @@
     coll
     (do
       (ensure-seqable coll path)
-      (cond (set? coll) (let [out (reduce (fn [acc x]
-                                            (let [y (f x)]
-                                              (if (elide? y) acc (conj acc y))))
-                                    (empty coll)
-                                    coll)]
-                          (if (= out coll) coll out))
-            (vector? coll)
-              (let [cnt (count coll)
-                    out (loop [i 0
-                               acc (transient [])]
-                          (if (< i cnt)
-                            (let [x (nth coll i)
-                                  y (f x)]
-                              (recur (inc i) (if (elide? y) acc (conj! acc y))))
-                            (persistent! acc)))]
-                (if (unchanged-coll? coll out) coll out))
-            :else (let [outv (reduce (fn [acc x]
-                                       (let [y (f x)]
-                                         (if (elide? y) acc (conj acc y))))
-                               []
-                               coll)
-                        out (if (list? coll) (apply list outv) (seq outv))]
-                    (if (unchanged-coll? coll outv) coll out))))))
+      (traverse-seq* coll f path))))
 
 (defn ^:no-doc traverse-map
   "Traverse map entries, applying f to each entry.
@@ -164,7 +181,15 @@
     (validate-destructure ctx)
     (make-destructure m path)))
 
-(declare pattern-parser)
+(p/define-parser symbol-pattern-parser
+                 (p/map-result (fn [{:keys [form path]}]
+                                 (make-bind form path form))
+                               (p/satisfy #(symbol? (:form %)))))
+
+(declare vector-pattern-parser
+         destructure-pattern-parser
+         map-entry-pattern-parser
+         pattern-parser)
 
 (defn- parse-pattern-form
   [form path]
@@ -174,11 +199,6 @@
              "Unsupported pattern"
              {:path path, :pattern form, :expected :pattern}))
     ast))
-
-(p/define-parser symbol-pattern-parser
-                 (p/map-result (fn [{:keys [form path]}]
-                                 (make-bind form path form))
-                               (p/satisfy #(symbol? (:form %)))))
 
 (p/define-parser vector-pattern-parser
                  (p/map-result
@@ -259,87 +279,6 @@
                 (range)
                 pairs)]
     {:selector sel, :steps steps}))
-
-;; Binding analysis
-
-(defn- binding-info
-  [sym kind path & {:keys [key]}]
-  {:sym sym, :kind kind, :path path, :key key})
-
-
-(declare validate-node validate-node!)
-
-(clos/defgeneric pat-bindings)
-
-(clos/defmethod pat-bindings [(pat (key= :op :bind))]
-  (let [pat (validate-node! pat)
-        sym (:sym pat)
-        path (:path pat)]
-    (if (= '_ sym) [] [(binding-info sym :value path)])))
-
-(clos/defmethod pat-bindings [(pat (key= :op :destructure))]
-  (let [pat (validate-node! pat)
-        keys (:keys pat)
-        strs (:strs pat)
-        as (:as pat)
-        path (:path pat)]
-    (vec (concat (for [s keys
-                       :when (not= '_ s)]
-                   (binding-info s :map-key path :key (keyword (name s))))
-                 (for [s strs
-                       :when (not= '_ s)]
-                   (binding-info s :map-key path :key (name s)))
-                 (when (and as (not= '_ as)) [(binding-info as :map path)])))))
-
-(clos/defmethod pat-bindings [(pat (key= :op :seq-elems))]
-  (let [pat (validate-node! pat)] (pat-bindings (:pat pat))))
-
-(clos/defmethod pat-bindings [(pat (key= :op :map-entries))]
-  (let [pat (validate-node! pat)]
-    (vec (concat (pat-bindings (:kpat pat)) (pat-bindings (:vpat pat))))))
-
-(clos/defmethod pat-bindings
-  [pat]
-  (error :validate "Unknown pattern op" {:pattern pat}))
-
-(defn- collect-bindings [pat] (pat-bindings pat))
-
-(defn- merge-bindings
-  [a b]
-  (reduce (fn [acc {:keys [sym], :as info}]
-            (when (contains? acc sym)
-              (error :validate
-                     "Duplicate binding"
-                     {:binding sym, :path (:path info)}))
-            (assoc acc sym info))
-    a
-    b))
-
-(defn- attach-children
-  [binding-children sym child]
-  (update binding-children sym (fnil conj []) child))
-
-(defn- analyze-bindings
-  [sel-ast]
-  (let [steps (:steps sel-ast)
-        first-step (first steps)
-        bindings (merge-bindings {} (collect-bindings (:pattern first-step)))
-        binding-children (atom {})]
-    (loop [i 1
-           bindings bindings]
-      (if (< i (count steps))
-        (let [{:keys [pattern source path]} (nth steps i)]
-          (when-not (symbol? source)
-            (error :validate
-                   "Source must be a bound symbol"
-                   {:path path, :source source}))
-          (when-not (contains? bindings source)
-            (error :validate
-                   "Source is not bound"
-                   {:path path, :source source}))
-          (swap! binding-children attach-children source pattern)
-          (recur (inc i) (merge-bindings bindings (collect-bindings pattern))))
-        {:bindings bindings, :binding-children @binding-children}))))
 
 ;; Body analysis
 
@@ -524,9 +463,89 @@
       (error :validate "Unknown pattern op" (node-ctx pat)))
     (or (first (remove nil? vals)) pat)))
 
-;; keep combination :list, handle unknowns after all checks
+(defn- binding-info
+  [sym kind path & {:keys [key]}]
+  {:sym sym, :kind kind, :path path, :key key})
 
-(declare emit-with-pattern emit-pattern-value)
+(clos/defgeneric pat-bindings)
+
+(clos/defmethod pat-bindings [(pat (key= :op :bind))]
+  (let [pat (validate-node! pat)
+        sym (:sym pat)
+        path (:path pat)]
+    (if (= '_ sym) [] [(binding-info sym :value path)])))
+
+(clos/defmethod pat-bindings [(pat (key= :op :destructure))]
+  (let [pat (validate-node! pat)
+        keys (:keys pat)
+        strs (:strs pat)
+        as (:as pat)
+        path (:path pat)]
+    (vec (concat (for [s keys
+                       :when (not= '_ s)]
+                   (binding-info s :map-key path :key (keyword (name s))))
+                 (for [s strs
+                       :when (not= '_ s)]
+                   (binding-info s :map-key path :key (name s)))
+                 (when (and as (not= '_ as)) [(binding-info as :map path)])))))
+
+(clos/defmethod pat-bindings [(pat (key= :op :seq-elems))]
+  (let [pat (validate-node! pat)] (pat-bindings (:pat pat))))
+
+(clos/defmethod pat-bindings [(pat (key= :op :map-entries))]
+  (let [pat (validate-node! pat)]
+    (vec (concat (pat-bindings (:kpat pat)) (pat-bindings (:vpat pat))))))
+
+(clos/defmethod pat-bindings
+  [pat]
+  (error :validate "Unknown pattern op" {:pattern pat}))
+
+;; Binding analysis
+
+(defn- collect-bindings [pat] (pat-bindings pat))
+
+(defn- merge-bindings
+  [a b]
+  (reduce (fn [acc {:keys [sym], :as info}]
+            (when (contains? acc sym)
+              (error :validate
+                     "Duplicate binding"
+                     {:binding sym, :path (:path info)}))
+            (assoc acc sym info))
+    a
+    b))
+
+(defn- attach-children
+  [binding-children sym child]
+  (update binding-children sym (fnil conj []) child))
+
+(defn- analyze-bindings
+  [sel-ast]
+  (let [steps (:steps sel-ast)
+        first-step (first steps)
+        bindings (merge-bindings {} (collect-bindings (:pattern first-step)))
+        binding-children (atom {})]
+    (loop [i 1
+           bindings bindings]
+      (if (< i (count steps))
+        (let [{:keys [pattern source path]} (nth steps i)]
+          (when-not (symbol? source)
+            (error :validate
+                   "Source must be a bound symbol"
+                   {:path path, :source source}))
+          (when-not (contains? bindings source)
+            (error :validate
+                   "Source is not bound"
+                   {:path path, :source source}))
+          (swap! binding-children attach-children source pattern)
+          (recur (inc i) (merge-bindings bindings (collect-bindings pattern))))
+        {:bindings bindings, :binding-children @binding-children}))))
+
+(clos/defgeneric emit-with-pattern)
+
+(defn- emit-pattern-value
+  [env pat value-expr]
+  (emit-with-pattern env pat value-expr (fn [v] v)))
 
 (defn- emit-apply-children
   [env v children]
@@ -667,8 +686,6 @@
                                       (body-fn as-val-sym))))
                         (body-fn m1#))))))))))))
 
-(clos/defgeneric emit-with-pattern)
-
 (clos/defmethod emit-with-pattern [env (pat (key= :op :bind)) value-expr body-fn]
   (emit-bind-scope env (:sym pat) value-expr body-fn))
 
@@ -688,10 +705,6 @@
 (clos/defmethod emit-with-pattern
   [env pat value-expr body-fn]
   (error :codegen "Unknown pattern op" {:pattern pat}))
-
-(defn- emit-pattern-value
-  [env pat value-expr]
-  (emit-with-pattern env pat value-expr (fn [v] v)))
 
 (clos/defgeneric assign-ids)
 
@@ -765,36 +778,26 @@
 
 (clos/defmethod emit-traversal-fn [_env _pat] nil)
 
-(defn- run-passes
-  [ctx passes]
-  (reduce (fn [c {:keys [id f]}]
-            (let [c' (f c)] (assoc c' :_last-pass id)))
-    ctx
-    passes))
+(clos/defgeneric run-pass)
 
-(defn- pass-parse
-  [ctx]
+(clos/defmethod run-pass [ctx (p (key= :phase :parse))]
   (assoc ctx :parse (parse-selector (:sel ctx))))
 
-(defn- pass-bindings
-  [ctx]
+(clos/defmethod run-pass [ctx (p (key= :phase :bindings))]
   (let [binding-pass (analyze-bindings (:parse ctx))]
     (assoc ctx :binding-pass binding-pass)))
 
-(defn- pass-body
-  [ctx]
+(clos/defmethod run-pass [ctx (p (key= :phase :body))]
   (let [body-pass (analyze-body (:body ctx)
                                 (:bindings (:binding-pass ctx)))]
     (assoc ctx :body-pass body-pass)))
 
-(defn- pass-conflicts
-  [ctx]
+(clos/defmethod run-pass [ctx (p (key= :phase :conflicts))]
   (detect-conflicts (:bindings (:binding-pass ctx))
                     (:rewrites (:body-pass ctx)))
   ctx)
 
-(defn- pass-usage
-  [ctx]
+(clos/defmethod run-pass [ctx (p (key= :phase :usage))]
   (let [parse-pass (:parse ctx)
         body-pass (:body-pass ctx)]
     (assoc ctx :used-syms
@@ -802,6 +805,16 @@
                           (:rewrites body-pass)
                           (:guards body-pass)
                           (:steps parse-pass)))))
+
+(clos/defmethod run-pass [ctx _p] ctx)
+
+(defn- run-passes
+  [ctx passes]
+  (reduce (fn [c p]
+            (let [c' (run-pass c p)]
+              (assoc c' :_last-pass (:phase p))))
+    ctx
+    passes))
 
 (defn- make-plan
   [ctx]
@@ -819,11 +832,11 @@
      :used-syms (:used-syms ctx)}))
 
 (def ^:private plan-passes
-  [{:id :parse, :f pass-parse}
-   {:id :bindings, :f pass-bindings}
-   {:id :body, :f pass-body}
-   {:id :conflicts, :f pass-conflicts}
-   {:id :usage, :f pass-usage}])
+  [{:phase :parse}
+   {:phase :bindings}
+   {:phase :body}
+   {:phase :conflicts}
+   {:phase :usage}])
 
 (defn- plan-over*
   "Compile-time planner: parse, validate, and analyze selector/body into a plan."
@@ -831,8 +844,7 @@
   (let [ctx (run-passes {:sel sel, :body body} plan-passes)]
     (make-plan ctx)))
 
-(defn- pass-annotate
-  [ctx]
+(clos/defmethod run-pass [ctx (p (key= :phase :annotate))]
   (let [plan (:plan ctx)
         root (:pattern (first (:steps plan)))
         trav (collect-all-traversals root (:binding-children plan))
@@ -850,8 +862,7 @@
       :node-fns node-fns
       :env env)))
 
-(defn- pass-lower
-  [ctx]
+(clos/defmethod run-pass [ctx (p (key= :phase :lower))]
   (let [{:keys [env nodes node-fns trav]} ctx
         fn-defs (vec (keep (fn [p]
                              (let [{:keys [form]} (emit-traversal-fn env p)]
@@ -864,16 +875,15 @@
         root-expr (emit-pattern-value env root-pattern input-sym)]
     (assoc ctx :ir {:fn-defs fn-defs, :root-expr root-expr, :input-sym input-sym})))
 
-(defn- pass-emit
-  [ctx]
+(clos/defmethod run-pass [ctx (p (key= :phase :emit))]
   (let [{:keys [fn-defs root-expr input-sym]} (:ir ctx)]
     (assoc ctx :form `(letfn [~@fn-defs]
                         (fn [~input-sym] ~root-expr)))))
 
 (def ^:private codegen-passes
-  [{:id :annotate, :f pass-annotate}
-   {:id :lower, :f pass-lower}
-   {:id :emit, :f pass-emit}])
+  [{:phase :annotate}
+   {:phase :lower}
+   {:phase :emit}])
 
 (defn- codegen*
   "Generate a compiled function form from a plan."
