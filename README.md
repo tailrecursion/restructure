@@ -12,6 +12,8 @@ Rewrite nested Clojure data with a declared shape.
 (over-plan selector body)    ; => compiler plan data
 ```
 
+See `CLOS.md` for the CLOS-style generic function system included in this repo.
+
 ## Examples
 
 ### 1) Update nested numbers without a full walk
