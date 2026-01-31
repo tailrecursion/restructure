@@ -178,6 +178,12 @@ clj -M:lint --lint src test
 clj -M:fmt
 ```
 
+## Check (format + test + lint)
+
+```bash
+clj -M:check
+```
+
 ## License
 
 MIT
