@@ -1,0 +1,5 @@
+{:lint-as {tailrecursion.restructure.parser/define-parser clojure.core/def}
+:hooks {:macroexpand {tailrecursion.restructure/over tailrecursion.restructure.kondo/over
+                       tailrecursion.restructure/compile-over tailrecursion.restructure.kondo/compile-over}
+        :analyze-call {tailrecursion.restructure/over tailrecursion.restructure.kondo/over
+                       tailrecursion.restructure/compile-over tailrecursion.restructure.kondo/compile-over}}}
