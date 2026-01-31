@@ -12,35 +12,46 @@ specializers. It is not a full Common Lisp Object System.
 (defrecord Db [^javax.sql.DataSource ds])
 
 (clos/defgeneric with-db {:combination :standard})
-(clos/defgeneric exec {:combination :standard})
+(clos/defgeneric run {:combination :standard})
 (clos/defgeneric close! {:combination :standard})
 
 (clos/defmethod with-db :around [(db Db) f]
-  ;; common pattern: run, then clean up
+  ;; mirrors the usual with-open/with-db-transaction shape
   (try
     (f db)
     (finally (close! db))))
 
-(clos/defmethod exec [(db Db) (q (pred string?))] [:query q])
-(clos/defmethod exec [(db Db) (q (pred vector?))] [:prepared q])
-(clos/defmethod exec [db _]
-  (throw (ex-info \"Bad query\" {:db db})))
+(clos/defmethod run :around [(db Db) (req (key= :op :tx))]
+  ;; tx wrapper as a method, not manual plumbing
+  (try
+    (let [ret (run db (:do req))]
+      ;; pretend: commit
+      ret)
+    (catch Throwable t
+      ;; pretend: rollback
+      (throw t))))
+
+(clos/defmethod run [(db Db) (req (key= :op :query))]
+  [:query (:sql req) (:params req)])
+
+(clos/defmethod run [(db Db) (req (key= :op :execute))]
+  [:exec (:sql req) (:params req)])
+
+(clos/defmethod run [(db Db) (req (key= :op :raw))]
+  [:raw (:sql req)])
+
+(clos/defmethod run [db _]
+  (throw (ex-info \"Bad request\" {:db db})))
 
 (clos/defmethod close! [(db Db)] :db-closed)
 
-(defn run [db q]
-  (with-db db #(exec % q)))
-
 (def db (->Db nil))
 
-(run db \"select 1\")
-;; => [:query \"select 1\"]
+(with-db db #(run % {:op :query :sql \"select * from users where id = ?\" :params [42]}))
+;; => [:query \"select * from users where id = ?\" [42]]
 
-(run db [\"select ?\" 42])
-;; => [:prepared [\"select ?\" 42]]
-
-(close! db)
-;; => :db-closed
+(with-db db #(run % {:op :tx :do {:op :execute :sql \"update users set name = ?\" :params [\"A\"]}}))
+;; => [:exec \"update users set name = ?\" [\"A\"]]
 ```
 
 ## Terminology
