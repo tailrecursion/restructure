@@ -248,29 +248,21 @@
                                 'destructure-pattern-parser
                                 'map-entry-pattern-parser))
 
-(defn- selector-ctx
+(defn- validate-selector
   [sel]
-  {:selector sel})
-
-(clos/defgeneric validate-selector)
-
-(clos/defmethod validate-selector [(ctx (pred #(not (vector? (:selector %)))))]
-  (error :parse
-         "Selector must be a vector"
-         (assoc ctx :expected :vector)))
-
-(clos/defmethod validate-selector [(ctx (pred #(and (vector? (:selector %))
-                                                  (odd? (count (:selector %))))))]
-  (error :parse
-         "Selector must have even number of forms"
-         (assoc ctx :expected :pattern-source-pairs)))
-
-(clos/defmethod validate-selector [ctx] ctx)
+  (when-not (vector? sel)
+    (error :parse
+           "Selector must be a vector"
+           {:selector sel, :expected :vector}))
+  (when (odd? (count sel))
+    (error :parse
+           "Selector must have even number of forms"
+           {:selector sel, :expected :pattern-source-pairs}))
+  sel)
 
 (defn- parse-selector
   [sel]
-  (let [ctx (selector-ctx sel)
-        _ (validate-selector ctx)
+  (let [_ (validate-selector sel)
         pairs (partition 2 sel)
         steps (mapv (fn [i [pat src]]
                       (let [path [:step i]
@@ -404,26 +396,21 @@
                      :else (str p)))]
     (str/join " / " (map part path))))
 
-(defn- path-ctx
+(defn- validate-path
   [path ctx]
-  (assoc ctx :path path :path-str (render-path path)))
-
-(clos/defgeneric validate-path)
-
-(clos/defmethod validate-path [(ctx (pred #(and (seq (:path %))
-                                               (not= :step (first (:path %))))))]
-  (error :validate "Invalid pattern path" ctx))
-
-(clos/defmethod validate-path [ctx] (:path ctx))
-
-(defn- validate-path* [path ctx]
-  (validate-path (path-ctx path ctx)))
+  (when (and (seq path) (not= :step (first path)))
+    (error :validate
+           "Invalid pattern path"
+           (assoc ctx
+             :path path
+             :path-str (render-path path))))
+  path)
 
 (defn- node-ctx
   [pat]
   (let [path (:path pat)
         ctx {:pattern (:form pat), :op (:op pat), :path path}]
-    (validate-path* path ctx)
+    (validate-path path ctx)
     ctx))
 
 (clos/defgeneric validate-node {:combination :list})
@@ -586,9 +573,10 @@
                              ~(body-fn out#))
                            elide))))))))
 
-(defn- emit-destructure-scope
-  [env pat value-expr body-fn]
-  (let [ks (:keys pat)
+(defn- destructure-prep
+  [ctx]
+  (let [{:keys [pat]} ctx
+        ks (:keys pat)
         ss (:strs pat)
         as (:as pat)
         orv (:or pat)
@@ -604,19 +592,44 @@
         v# (gensym "m")
         had-syms (zipmap all-syms
                          (map (fn [s] (gensym (str "had_" (name s)))) all-syms))
-        key-children (fn [s] (get-in env [:binding-children s]))
         key-drop-syms (zipmap all-syms
                               (map (fn [s] (gensym (str (name s) "_drop")))
-                                all-syms))
+                                all-syms))]
+    (assoc ctx
+      :ks ks
+      :ss ss
+      :as as
+      :orv orv
+      :dform dform
+      :all-syms all-syms
+      :key->k key->k
+      :v# v#
+      :had-syms had-syms
+      :key-drop-syms key-drop-syms)))
+
+(defn- destructure-had
+  [ctx]
+  (let [{:keys [all-syms key->k v# had-syms]} ctx
         had-bindings (vec (mapcat (fn [s] [(get had-syms s)
                                            `(contains? ~v# ~(get key->k s))])
-                            all-syms))
+                            all-syms))]
+    (assoc ctx :had-bindings had-bindings)))
+
+(defn- destructure-children
+  [ctx]
+  (let [{:keys [env all-syms]} ctx
+        key-children (fn [s] (get-in env [:binding-children s]))
         child-bindings
           (vec (mapcat (fn [s] [s
                                 (if (seq (key-children s))
                                   (emit-apply-children env s (key-children s))
                                   s)])
-                 all-syms))
+                 all-syms))]
+    (assoc ctx :child-bindings child-bindings)))
+
+(defn- destructure-guards
+  [ctx]
+  (let [{:keys [env all-syms key-drop-syms]} ctx
         key-bindings
           (vec
             (mapcat
@@ -629,7 +642,12 @@
                   [drop-sym
                    `(or (elide? ~s) (not ~(if guard-present? guard-expr true)))
                    s `(if ~drop-sym ~s ~(if rewrite-present? rewrite-expr s))]))
-              all-syms))
+              all-syms))]
+    (assoc ctx :key-bindings key-bindings)))
+
+(defn- destructure-map
+  [ctx]
+  (let [{:keys [env all-syms key->k v# had-syms key-drop-syms]} ctx
         m1# (gensym "m1")
         map-bindings (vec (reduce (fn [acc s]
                                     (let [drop-sym (get key-drop-syms s)
@@ -646,45 +664,72 @@
                                                  ~m1#)))))
                             [m1# v#]
                             all-syms))]
-    `(let [~v# ~value-expr]
-       (if (nil? ~v#)
-         nil
-         (do
-           (ensure-map ~v# ~(node-path pat))
-           (let [~@had-bindings]
-             (let [~dform ~v#]
-               (let [~@child-bindings]
-                 (let [~@key-bindings]
-                   (let [~@map-bindings]
-                     ~(if as
-                        (let [as-children (get-in env [:binding-children as])
-                              as-guard-present? (contains? (:guards env) as)
-                              as-guard (get-in env [:guards as])
-                              as-rewrite-present? (contains? (:rewrites env) as)
-                              as-rewrite (get-in env [:rewrites as])
-                              as-drop-sym (gensym "as_drop")
-                              as-val-sym (gensym "as_val")
-                              as-child-expr
-                                (if (seq as-children)
-                                  (emit-apply-children env as as-children)
-                                  as)
-                              as-guard-expr (if as-guard-present? as-guard true)
-                              as-rewrite-expr
-                                (if as-rewrite-present? as-rewrite as)
-                              elide?-sym 'tailrecursion.restructure/elide?
-                              elide-sym 'tailrecursion.restructure/elide]
-                          (list 'let
-                                [as m1# as as-child-expr as-drop-sym
-                                 (list 'or
-                                       (list elide?-sym as)
-                                       (list 'not as-guard-expr)) as
-                                 (list 'if as-drop-sym as as-rewrite-expr)
-                                 as-val-sym as]
-                                (list 'if
-                                      as-drop-sym
-                                      elide-sym
-                                      (body-fn as-val-sym))))
-                        (body-fn m1#))))))))))))
+    (assoc ctx :map-bindings map-bindings :m1# m1#)))
+
+(defn- destructure-as
+  [ctx]
+  (let [{:keys [env as m1# body-fn]} ctx
+        as-expr (if as
+                  (let [as-children (get-in env [:binding-children as])
+                        as-guard-present? (contains? (:guards env) as)
+                        as-guard (get-in env [:guards as])
+                        as-rewrite-present? (contains? (:rewrites env) as)
+                        as-rewrite (get-in env [:rewrites as])
+                        as-drop-sym (gensym "as_drop")
+                        as-val-sym (gensym "as_val")
+                        as-child-expr
+                          (if (seq as-children)
+                            (emit-apply-children env as as-children)
+                            as)
+                        as-guard-expr (if as-guard-present? as-guard true)
+                        as-rewrite-expr
+                          (if as-rewrite-present? as-rewrite as)
+                        elide?-sym 'tailrecursion.restructure/elide?
+                        elide-sym 'tailrecursion.restructure/elide]
+                    (list 'let
+                          [as m1# as as-child-expr as-drop-sym
+                           (list 'or
+                                 (list elide?-sym as)
+                                 (list 'not as-guard-expr)) as
+                           (list 'if as-drop-sym as as-rewrite-expr)
+                           as-val-sym as]
+                          (list 'if
+                                as-drop-sym
+                                elide-sym
+                                (body-fn as-val-sym))))
+                  (body-fn m1#))]
+    (assoc ctx :as-expr as-expr)))
+
+(defn- destructure-emit
+  [ctx]
+  (let [{:keys [pat value-expr dform v#
+                had-bindings child-bindings
+                key-bindings map-bindings as-expr]} ctx]
+    (assoc ctx :form
+           `(let [~v# ~value-expr]
+              (if (nil? ~v#)
+                nil
+                (do
+                  (ensure-map ~v# ~(node-path pat))
+                  (let [~@had-bindings]
+                    (let [~dform ~v#]
+                      (let [~@child-bindings]
+                        (let [~@key-bindings]
+                          (let [~@map-bindings]
+                            ~as-expr)))))))))))
+
+(defn- emit-destructure-scope
+  [env pat value-expr body-fn]
+  (let [ctx (reduce (fn [c f] (f c))
+              {:env env, :pat pat, :value-expr value-expr, :body-fn body-fn}
+              [destructure-prep
+               destructure-had
+               destructure-children
+               destructure-guards
+               destructure-map
+               destructure-as
+               destructure-emit])]
+    (:form ctx)))
 
 (clos/defmethod emit-with-pattern [env (pat (key= :op :bind)) value-expr body-fn]
   (emit-bind-scope env (:sym pat) value-expr body-fn))
@@ -778,43 +823,9 @@
 
 (clos/defmethod emit-traversal-fn [_env _pat] nil)
 
-(clos/defgeneric run-pass)
-
-(clos/defmethod run-pass [ctx (p (key= :phase :parse))]
-  (assoc ctx :parse (parse-selector (:sel ctx))))
-
-(clos/defmethod run-pass [ctx (p (key= :phase :bindings))]
-  (let [binding-pass (analyze-bindings (:parse ctx))]
-    (assoc ctx :binding-pass binding-pass)))
-
-(clos/defmethod run-pass [ctx (p (key= :phase :body))]
-  (let [body-pass (analyze-body (:body ctx)
-                                (:bindings (:binding-pass ctx)))]
-    (assoc ctx :body-pass body-pass)))
-
-(clos/defmethod run-pass [ctx (p (key= :phase :conflicts))]
-  (detect-conflicts (:bindings (:binding-pass ctx))
-                    (:rewrites (:body-pass ctx)))
-  ctx)
-
-(clos/defmethod run-pass [ctx (p (key= :phase :usage))]
-  (let [parse-pass (:parse ctx)
-        body-pass (:body-pass ctx)]
-    (assoc ctx :used-syms
-           (analyze-usage (:body ctx)
-                          (:rewrites body-pass)
-                          (:guards body-pass)
-                          (:steps parse-pass)))))
-
-(clos/defmethod run-pass [ctx _p] ctx)
-
 (defn- run-passes
   [ctx passes]
-  (reduce (fn [c p]
-            (let [c' (run-pass c p)]
-              (assoc c' :_last-pass (:phase p))))
-    ctx
-    passes))
+  (reduce (fn [c f] (f c)) ctx passes))
 
 (defn- make-plan
   [ctx]
@@ -831,12 +842,42 @@
      :guard-nodes (:guard-nodes body-pass),
      :used-syms (:used-syms ctx)}))
 
+(defn- pass-parse
+  [ctx]
+  (assoc ctx :parse (parse-selector (:sel ctx))))
+
+(defn- pass-bindings
+  [ctx]
+  (assoc ctx :binding-pass (analyze-bindings (:parse ctx))))
+
+(defn- pass-body
+  [ctx]
+  (assoc ctx :body-pass
+         (analyze-body (:body ctx)
+                       (:bindings (:binding-pass ctx)))))
+
+(defn- pass-conflicts
+  [ctx]
+  (detect-conflicts (:bindings (:binding-pass ctx))
+                    (:rewrites (:body-pass ctx)))
+  ctx)
+
+(defn- pass-usage
+  [ctx]
+  (let [parse-pass (:parse ctx)
+        body-pass (:body-pass ctx)]
+    (assoc ctx :used-syms
+           (analyze-usage (:body ctx)
+                          (:rewrites body-pass)
+                          (:guards body-pass)
+                          (:steps parse-pass)))))
+
 (def ^:private plan-passes
-  [{:phase :parse}
-   {:phase :bindings}
-   {:phase :body}
-   {:phase :conflicts}
-   {:phase :usage}])
+  [pass-parse
+   pass-bindings
+   pass-body
+   pass-conflicts
+   pass-usage])
 
 (defn- plan-over*
   "Compile-time planner: parse, validate, and analyze selector/body into a plan."
@@ -844,7 +885,8 @@
   (let [ctx (run-passes {:sel sel, :body body} plan-passes)]
     (make-plan ctx)))
 
-(clos/defmethod run-pass [ctx (p (key= :phase :annotate))]
+(defn- codegen-annotate
+  [ctx]
   (let [plan (:plan ctx)
         root (:pattern (first (:steps plan)))
         trav (collect-all-traversals root (:binding-children plan))
@@ -862,7 +904,8 @@
       :node-fns node-fns
       :env env)))
 
-(clos/defmethod run-pass [ctx (p (key= :phase :lower))]
+(defn- codegen-lower
+  [ctx]
   (let [{:keys [env nodes node-fns trav]} ctx
         fn-defs (vec (keep (fn [p]
                              (let [{:keys [form]} (emit-traversal-fn env p)]
@@ -875,15 +918,16 @@
         root-expr (emit-pattern-value env root-pattern input-sym)]
     (assoc ctx :ir {:fn-defs fn-defs, :root-expr root-expr, :input-sym input-sym})))
 
-(clos/defmethod run-pass [ctx (p (key= :phase :emit))]
+(defn- codegen-emit
+  [ctx]
   (let [{:keys [fn-defs root-expr input-sym]} (:ir ctx)]
     (assoc ctx :form `(letfn [~@fn-defs]
                         (fn [~input-sym] ~root-expr)))))
 
 (def ^:private codegen-passes
-  [{:phase :annotate}
-   {:phase :lower}
-   {:phase :emit}])
+  [codegen-annotate
+   codegen-lower
+   codegen-emit])
 
 (defn- codegen*
   "Generate a compiled function form from a plan."
