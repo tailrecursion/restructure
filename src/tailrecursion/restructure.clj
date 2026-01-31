@@ -5,11 +5,7 @@
 
 (def ^:no-doc elide ::elide)
 
-(def ^:private drop-key ::drop-key)
-
 (defn ^:no-doc elide? [x] (identical? x elide))
-
-(defn- drop-key? [x] (identical? x drop-key))
 
 (defn- error
   ([msg data] (throw (ex-info msg data)))
@@ -84,11 +80,11 @@
                       (let [r (f k v)]
                         (if (elide? r) acc (assoc acc (nth r 0) (nth r 1)))))
                     base
-                    m)]
-          (let [out (if (identical? (meta m) (meta out))
-                      out
-                      (with-meta out (meta m)))]
-            (if (= out m) m out))))))
+                    m)
+              out (if (identical? (meta m) (meta out))
+                    out
+                    (with-meta out (meta m)))]
+          (if (= out m) m out)))))
 
 ;; Parsing / validation
 
@@ -368,7 +364,7 @@
     {:rewrites @rewrites, :guards @guards, :guard-nodes @guard-nodes}))
 
 (defn- detect-conflicts
-  [bindings rewrites guards]
+  [bindings rewrites]
   (doseq [[sym {:keys [kind]}] bindings]
     (when (and (= kind :map) (contains? rewrites sym))
       (let [node-path (:path (bindings sym))
@@ -468,87 +464,84 @@
         key-children (fn [s] (get-in env [:binding-children s]))
         key-drop-syms (zipmap all-syms
                               (map (fn [s] (gensym (str (name s) "_drop")))
-                                all-syms))]
-    (let [had-bindings (vec (mapcat (fn [s] [(get had-syms s)
-                                             `(contains? ~v# ~(get key->k s))])
-                              all-syms))
-          child-bindings
-            (vec (mapcat (fn [s] [s
-                                  (if (seq (key-children s))
-                                    (emit-apply-children env s (key-children s))
-                                    s)])
-                   all-syms))
-          key-bindings
-            (vec (mapcat (fn [s]
-                           (let [guard-present? (contains? (:guards env) s)
-                                 guard-expr (get-in env [:guards s])
-                                 rewrite-present? (contains? (:rewrites env) s)
-                                 rewrite-expr (get-in env [:rewrites s])
-                                 drop-sym (get key-drop-syms s)]
-                             [drop-sym
-                              `(or (elide? ~s)
-                                   (not ~(if guard-present? guard-expr true))) s
-                              `(if ~drop-sym
-                                 ~s
-                                 ~(if rewrite-present? rewrite-expr s))]))
-                   all-syms))
-          m1# (gensym "m1")
-          map-bindings (vec
-                         (reduce (fn [acc s]
-                                   (let [drop-sym (get key-drop-syms s)
-                                         had? (get had-syms s)
-                                         k (get key->k s)
-                                         rewrite? (contains? (:rewrites env) s)]
-                                     (conj acc
-                                           m1#
-                                           `(if ~drop-sym
-                                              (if ~had? (dissoc ~m1# ~k) ~m1#)
-                                              (if (or ~had? ~rewrite?)
-                                                (assoc ~m1# ~k ~s)
-                                                ~m1#)))))
-                           [m1# v#]
-                           all-syms))]
-      `(let [~v# ~value-expr]
-         (if (nil? ~v#)
-           nil
-           (do
-             (ensure-map ~v# ~(node-path pat))
-             (let [~@had-bindings]
-               (let [~dform ~v#]
-                 (let [~@child-bindings]
-                   (let [~@key-bindings]
-                     (let [~@map-bindings]
-                       ~(if as
-                          (let [as-children (get-in env [:binding-children as])
-                                as-guard-present? (contains? (:guards env) as)
-                                as-guard (get-in env [:guards as])
-                                as-rewrite-present? (contains? (:rewrites env)
-                                                               as)
-                                as-rewrite (get-in env [:rewrites as])
-                                as-drop-sym (gensym "as_drop")
-                                as-val-sym (gensym "as_val")
-                                as-child-expr
-                                  (if (seq as-children)
-                                    (emit-apply-children env as as-children)
-                                    as)
-                                as-guard-expr
-                                  (if as-guard-present? as-guard true)
-                                as-rewrite-expr
-                                  (if as-rewrite-present? as-rewrite as)
-                                elide?-sym 'tailrecursion.restructure/elide?
-                                elide-sym 'tailrecursion.restructure/elide]
-                            (list 'let
-                                  [as m1# as as-child-expr as-drop-sym
-                                   (list 'or
-                                         (list elide?-sym as)
-                                         (list 'not as-guard-expr)) as
-                                   (list 'if as-drop-sym as as-rewrite-expr)
-                                   as-val-sym as]
-                                  (list 'if
-                                        as-drop-sym
-                                        elide-sym
-                                        (body-fn as-val-sym))))
-                          (body-fn m1#)))))))))))))
+                                all-syms))
+        had-bindings (vec (mapcat (fn [s] [(get had-syms s)
+                                           `(contains? ~v# ~(get key->k s))])
+                            all-syms))
+        child-bindings
+          (vec (mapcat (fn [s] [s
+                                (if (seq (key-children s))
+                                  (emit-apply-children env s (key-children s))
+                                  s)])
+                 all-syms))
+        key-bindings
+          (vec
+            (mapcat
+              (fn [s]
+                (let [guard-present? (contains? (:guards env) s)
+                      guard-expr (get-in env [:guards s])
+                      rewrite-present? (contains? (:rewrites env) s)
+                      rewrite-expr (get-in env [:rewrites s])
+                      drop-sym (get key-drop-syms s)]
+                  [drop-sym
+                   `(or (elide? ~s) (not ~(if guard-present? guard-expr true)))
+                   s `(if ~drop-sym ~s ~(if rewrite-present? rewrite-expr s))]))
+              all-syms))
+        m1# (gensym "m1")
+        map-bindings (vec (reduce (fn [acc s]
+                                    (let [drop-sym (get key-drop-syms s)
+                                          had? (get had-syms s)
+                                          k (get key->k s)
+                                          rewrite? (contains? (:rewrites env)
+                                                              s)]
+                                      (conj acc
+                                            m1#
+                                            `(if ~drop-sym
+                                               (if ~had? (dissoc ~m1# ~k) ~m1#)
+                                               (if (or ~had? ~rewrite?)
+                                                 (assoc ~m1# ~k ~s)
+                                                 ~m1#)))))
+                            [m1# v#]
+                            all-syms))]
+    `(let [~v# ~value-expr]
+       (if (nil? ~v#)
+         nil
+         (do
+           (ensure-map ~v# ~(node-path pat))
+           (let [~@had-bindings]
+             (let [~dform ~v#]
+               (let [~@child-bindings]
+                 (let [~@key-bindings]
+                   (let [~@map-bindings]
+                     ~(if as
+                        (let [as-children (get-in env [:binding-children as])
+                              as-guard-present? (contains? (:guards env) as)
+                              as-guard (get-in env [:guards as])
+                              as-rewrite-present? (contains? (:rewrites env) as)
+                              as-rewrite (get-in env [:rewrites as])
+                              as-drop-sym (gensym "as_drop")
+                              as-val-sym (gensym "as_val")
+                              as-child-expr
+                                (if (seq as-children)
+                                  (emit-apply-children env as as-children)
+                                  as)
+                              as-guard-expr (if as-guard-present? as-guard true)
+                              as-rewrite-expr
+                                (if as-rewrite-present? as-rewrite as)
+                              elide?-sym 'tailrecursion.restructure/elide?
+                              elide-sym 'tailrecursion.restructure/elide]
+                          (list 'let
+                                [as m1# as as-child-expr as-drop-sym
+                                 (list 'or
+                                       (list elide?-sym as)
+                                       (list 'not as-guard-expr)) as
+                                 (list 'if as-drop-sym as as-rewrite-expr)
+                                 as-val-sym as]
+                                (list 'if
+                                      as-drop-sym
+                                      elide-sym
+                                      (body-fn as-val-sym))))
+                        (body-fn m1#))))))))))))
 
 (defmulti emit-with-pattern (fn [_env pat _value-expr _body-fn] (:op pat)))
 
@@ -662,9 +655,7 @@
   (let [parse-pass (parse-selector sel)
         binding-pass (analyze-bindings parse-pass)
         body-pass (analyze-body body (:bindings binding-pass))]
-    (detect-conflicts (:bindings binding-pass)
-                      (:rewrites body-pass)
-                      (:guards body-pass))
+    (detect-conflicts (:bindings binding-pass) (:rewrites body-pass))
     (let [used (analyze-usage body
                               (:rewrites body-pass)
                               (:guards body-pass)

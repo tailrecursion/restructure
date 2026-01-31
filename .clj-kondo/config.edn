@@ -1,7 +1,12 @@
 {:linters
- {:unused-binding {:level :warning}
-  :unused-namespace {:level :warning}
-  :unused-referred-var {:level :warning}}
+ {:unused-binding {:level :error}
+  :unused-namespace {:level :error}
+  :unused-referred-var {:level :error}
+  :refer-all {:level :error}
+  :redundant-let {:level :error}
+  :unresolved-var {:level :error
+                   :exclude [clojure.test/thrown?
+                             clojure.test/thrown-with-msg?]}}
  :lint-as {tailrecursion.restructure.parser/define-parser clojure.core/def}
  :hooks
  {:macroexpand {tailrecursion.restructure/over tailrecursion.restructure.kondo/over

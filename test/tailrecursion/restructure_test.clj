@@ -1,7 +1,13 @@
 (ns tailrecursion.restructure-test
-  (:require [clojure.test :refer :all]
+  (:require [clojure.test :refer [deftest is]]
             [tailrecursion.restructure :refer [over compile-over over-plan]]
             [clojure.string :as str]))
+
+(defmacro thrown? [cls & body] `(try ~@body false (catch ~cls _# true)))
+
+(defmacro thrown-with-msg?
+  [cls re & body]
+  `(try ~@body false (catch ~cls e# (boolean (re-find ~re (.getMessage e#))))))
 
 (deftest readme-example-1
   (let [data {:a [{:aa 1, :bb 2} {:cc 3}], :b [{:dd 4}]}
@@ -23,8 +29,7 @@
                :lines [{:sku "A", :qty 2} {:sku "", :qty 1} {:sku "B", :qty 0}]}
         out (over [{:keys [lines]} order [{:keys [sku qty], :as line}] lines]
                   {line? (seq sku), qty (or qty 0)})]
-    (is
-      (= {:id 42, :lines [{:sku "A", :qty 2} {:sku "B", :qty 0}]} out))))
+    (is (= {:id 42, :lines [{:sku "A", :qty 2} {:sku "B", :qty 0}]} out))))
 
 (deftest example-2
   (let [users {:alice {:active true,

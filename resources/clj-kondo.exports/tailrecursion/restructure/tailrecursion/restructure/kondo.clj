@@ -56,7 +56,8 @@
   (if (seq bindings)
     (let [node (api/list-node (list (api/token-node 'let)
                                     (api/vector-node
-                                      (mapcat (fn [s] [(api/token-node s)
+                                      (mapcat (fn [s] [(api/token-node (symbol
+                                                                         s))
                                                        (api/token-node nil)])
                                         bindings))
                                     body-node))]
@@ -71,6 +72,18 @@
   [form]
   (let [args (rest (:children form))] (nth args 0)))
 
+(defn- selector-source-nodes
+  [selector-node]
+  (when (= (:tag selector-node) :vector)
+    (->> (:children selector-node)
+         (keep-indexed (fn [i n] (when (odd? i) n))))))
+
+(defn- wrap-body
+  [body-node sources]
+  (if (seq sources)
+    (api/list-node (cons (api/token-node 'do) (cons body-node sources)))
+    body-node))
+
 (defn over
   [{:keys [node]}]
   (let [selector-node (macro-call->selector-node node)
@@ -78,8 +91,10 @@
         selector (api/sexpr selector-node)
         body (api/sexpr body-node)
         bindings (distinct (concat (selector-bindings selector)
-                                   (body-bindings body)))]
-    {:node (add-bindings body-node bindings)}))
+                                   (body-bindings body)))
+        sources (selector-source-nodes selector-node)
+        wrapped (wrap-body body-node sources)]
+    {:node (add-bindings wrapped bindings)}))
 
 (defn compile-over
   [{:keys [node]}]
@@ -88,5 +103,7 @@
         selector (api/sexpr selector-node)
         body (api/sexpr body-node)
         bindings (distinct (concat (selector-bindings selector)
-                                   (body-bindings body)))]
-    {:node (add-bindings body-node bindings)}))
+                                   (body-bindings body)))
+        sources (selector-source-nodes selector-node)
+        wrapped (wrap-body body-node sources)]
+    {:node (add-bindings wrapped bindings)}))

@@ -171,6 +171,13 @@ Plain Clojure is already a win when:
 clojure -M:test
 ```
 
+## Lint and format
+
+```bash
+clj -M:lint --lint src test
+clj -M:fmt
+```
+
 ## License
 
 MIT
