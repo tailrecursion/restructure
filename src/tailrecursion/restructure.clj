@@ -32,8 +32,7 @@
 
 (defn- unchanged-coll?
   [coll out]
-  (and (= (count coll) (count out))
-       (every? true? (map identical? coll out))))
+  (and (= (count coll) (count out)) (every? true? (map identical? coll out))))
 
 (defn ^:no-doc traverse-seq
   "Traverse a sequential or set, applying f to each element.
@@ -136,19 +135,13 @@
 
 (declare pattern-parser)
 
-(defn- pattern-token [form path] {:kind :pattern, :form form, :path path})
-
 (defn- parse-pattern-form
   [form path]
-  (let [[ok ast rest] (p/parse-all pattern-parser [(pattern-token form path)])]
+  (let [[ok ast] (p/parse-all pattern-parser {:form form, :path path})]
     (when-not ok
       (error :parse
              "Unsupported pattern"
              {:path path, :pattern form, :expected :pattern}))
-    (when (seq rest)
-      (error :parse
-             "Unconsumed pattern forms"
-             {:path path, :pattern form, :remaining rest}))
     ast))
 
 (p/define-parser symbol-pattern-parser
@@ -205,7 +198,7 @@
                                 'destructure-pattern-parser
                                 'map-entry-pattern-parser))
 
-(defn- tokenize-selector
+(defn- parse-selector
   [sel]
   (when-not (vector? sel)
     (error :parse
@@ -215,39 +208,14 @@
     (error :parse
            "Selector must have even number of forms"
            {:selector sel, :expected :pattern-source-pairs}))
-  (let [pairs (partition 2 sel)]
-    (vec
-      (mapcat (fn [i [pat src]] [{:kind :pattern, :form pat, :path [:step i]}
-                                 {:kind :source, :form src, :path [:step i]}])
-        (range)
-        pairs))))
-
-(p/define-parser pattern-token-parser
-                 (p/map-result (fn [tok]
-                                 (parse-pattern-form (:form tok) (:path tok)))
-                               (p/satisfy #(= :pattern (:kind %)))))
-
-(p/define-parser source-token-parser
-                 (p/map-result :form (p/satisfy #(= :source (:kind %)))))
-
-(p/define-parser step-parser
-                 (p/consecutive
-                   (fn [pat src] {:pattern pat, :source src, :path (:path pat)})
-                   'pattern-token-parser
-                   'source-token-parser))
-
-(p/define-parser selector-parser (p/many1 'step-parser))
-
-(defn- parse-selector
-  [sel]
-  (let [tokens (tokenize-selector sel)
-        [ok steps rest] (p/parse-all selector-parser tokens)]
-    (when-not ok (error :parse "Failed to parse selector" {:selector sel}))
-    (when (seq rest)
-      (error :parse
-             "Unconsumed selector forms"
-             {:selector sel, :remaining rest}))
-    {:selector sel, :steps (vec steps)}))
+  (let [pairs (partition 2 sel)
+        steps (mapv (fn [i [pat src]]
+                      (let [path [:step i]
+                            pat-ast (parse-pattern-form pat path)]
+                        {:pattern pat-ast, :source src, :path path}))
+                (range)
+                pairs)]
+    {:selector sel, :steps steps}))
 
 ;; Binding analysis
 
@@ -284,8 +252,7 @@
 
 (defmethod pat-bindings :seq-elems
   [pat]
-  (let [pat (validate-node pat)]
-    (pat-bindings (:pat pat))))
+  (let [pat (validate-node pat)] (pat-bindings (:pat pat))))
 
 (defmethod pat-bindings :map-entries
   [pat]
@@ -417,13 +384,13 @@
 
 (defn- node-path [pat] (:path pat))
 
-(defn- render-path [path]
+(defn- render-path
+  [path]
   (let [part (fn [p]
-               (cond
-                 (integer? p) (str "step " p)
-                 (= p :key) "key"
-                 (= p :val) "value"
-                 :else (str p)))]
+               (cond (integer? p) (str "step " p)
+                     (= p :key) "key"
+                     (= p :val) "value"
+                     :else (str p)))]
     (str/join " / " (map part path))))
 
 (defn- validate-path
@@ -431,24 +398,30 @@
   (when (and (seq path) (not= :step (first path)))
     (error :validate
            "Invalid pattern path"
-           (assoc ctx :path path :path-str (render-path path))))
+           (assoc ctx
+             :path path
+             :path-str (render-path path))))
   path)
 
 (defn- validate-node
   [pat]
   (let [path (:path pat)
-        ctx {:pattern (:form pat) :op (:op pat)}]
+        ctx {:pattern (:form pat), :op (:op pat)}]
     (validate-path path ctx)
     (case (:op pat)
       :bind (when-not (symbol? (:sym pat))
               (error :validate "Invalid bind node" (assoc ctx :path path)))
-      :seq-elems (when-not (:pat pat)
-                   (error :validate "Missing :pat in seq node" (assoc ctx :path path)))
-      :map-entries (do
-                     (when-not (:kpat pat)
-                       (error :validate "Missing :kpat in map-entry node" (assoc ctx :path path)))
-                     (when-not (:vpat pat)
-                       (error :validate "Missing :vpat in map-entry node" (assoc ctx :path path))))
+      :seq-elems
+        (when-not (:pat pat)
+          (error :validate "Missing :pat in seq node" (assoc ctx :path path)))
+      :map-entries (do (when-not (:kpat pat)
+                         (error :validate
+                                "Missing :kpat in map-entry node"
+                                (assoc ctx :path path)))
+                       (when-not (:vpat pat)
+                         (error :validate
+                                "Missing :vpat in map-entry node"
+                                (assoc ctx :path path))))
       :destructure nil
       (error :validate "Unknown pattern op" (assoc ctx :path path)))
     pat))
