@@ -100,6 +100,14 @@
                         #"Pattern type mismatch"
                         (over [{k v} [1 2 3]] {v (inc v)}))))
 
+(deftest error-shapes
+  (let [data (try (over [[n] {:a 1}] {n (inc n)})
+                  (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+    (is (= :runtime (:phase data)))
+    (is (= :seqable (:expected data)))
+    (is (contains? data :path))
+    (is (contains? data :value))))
+
 (deftest structural-sharing
   (let [data {:a 1, :b 2}
         result (over [{k v} data] {})]

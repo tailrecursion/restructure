@@ -17,7 +17,8 @@
          "Pattern type mismatch"
          {:path path,
           :expected expected,
-          :actual (if (nil? actual) nil (type actual))}))
+          :actual (if (nil? actual) nil (type actual)),
+          :value actual}))
 
 (defn ^:no-doc ensure-map
   [v path]
@@ -28,6 +29,11 @@
   [v path]
   (when-not (or (sequential? v) (set? v) (seq? v)) (type-error path :seqable v))
   v)
+
+(defn- unchanged-coll?
+  [coll out]
+  (and (= (count coll) (count out))
+       (every? true? (map identical? coll out))))
 
 (defn ^:no-doc traverse-seq
   "Traverse a sequential or set, applying f to each element.
@@ -52,20 +58,14 @@
                                   y (f x)]
                               (recur (inc i) (if (elide? y) acc (conj! acc y))))
                             (persistent! acc)))]
-                (if (and (= cnt (count out))
-                         (every? true? (map identical? coll out)))
-                  coll
-                  out))
+                (if (unchanged-coll? coll out) coll out))
             :else (let [outv (reduce (fn [acc x]
                                        (let [y (f x)]
                                          (if (elide? y) acc (conj acc y))))
                                []
                                coll)
                         out (if (list? coll) (apply list outv) (seq outv))]
-                    (if (and (= (count outv) (count coll))
-                             (every? true? (map identical? coll outv)))
-                      coll
-                      out))))))
+                    (if (unchanged-coll? coll outv) coll out))))))
 
 (defn ^:no-doc traverse-map
   "Traverse map entries, applying f to each entry.
@@ -255,27 +255,42 @@
   [sym kind path & {:keys [key]}]
   {:sym sym, :kind kind, :path path, :key key})
 
+
+(declare validate-node)
+
 (defmulti pat-bindings :op)
 
 (defmethod pat-bindings :bind
-  [{:keys [sym path]}]
-  (if (= '_ sym) [] [(binding-info sym :value path)]))
+  [pat]
+  (let [pat (validate-node pat)
+        sym (:sym pat)
+        path (:path pat)]
+    (if (= '_ sym) [] [(binding-info sym :value path)])))
 
 (defmethod pat-bindings :destructure
-  [{:keys [keys strs as path]}]
-  (vec (concat (for [s keys
-                     :when (not= '_ s)]
-                 (binding-info s :map-key path :key (keyword (name s))))
-               (for [s strs
-                     :when (not= '_ s)]
-                 (binding-info s :map-key path :key (name s)))
-               (when (and as (not= '_ as)) [(binding-info as :map path)]))))
+  [pat]
+  (let [pat (validate-node pat)
+        keys (:keys pat)
+        strs (:strs pat)
+        as (:as pat)
+        path (:path pat)]
+    (vec (concat (for [s keys
+                       :when (not= '_ s)]
+                   (binding-info s :map-key path :key (keyword (name s))))
+                 (for [s strs
+                       :when (not= '_ s)]
+                   (binding-info s :map-key path :key (name s)))
+                 (when (and as (not= '_ as)) [(binding-info as :map path)])))))
 
-(defmethod pat-bindings :seq-elems [{:keys [pat]}] (pat-bindings pat))
+(defmethod pat-bindings :seq-elems
+  [pat]
+  (let [pat (validate-node pat)]
+    (pat-bindings (:pat pat))))
 
 (defmethod pat-bindings :map-entries
-  [{:keys [kpat vpat]}]
-  (vec (concat (pat-bindings kpat) (pat-bindings vpat))))
+  [pat]
+  (let [pat (validate-node pat)]
+    (vec (concat (pat-bindings (:kpat pat)) (pat-bindings (:vpat pat))))))
 
 (defmethod pat-bindings :default
   [pat]
@@ -401,6 +416,42 @@
 ;; Codegen helpers
 
 (defn- node-path [pat] (:path pat))
+
+(defn- render-path [path]
+  (let [part (fn [p]
+               (cond
+                 (integer? p) (str "step " p)
+                 (= p :key) "key"
+                 (= p :val) "value"
+                 :else (str p)))]
+    (str/join " / " (map part path))))
+
+(defn- validate-path
+  [path ctx]
+  (when (and (seq path) (not= :step (first path)))
+    (error :validate
+           "Invalid pattern path"
+           (assoc ctx :path path :path-str (render-path path))))
+  path)
+
+(defn- validate-node
+  [pat]
+  (let [path (:path pat)
+        ctx {:pattern (:form pat) :op (:op pat)}]
+    (validate-path path ctx)
+    (case (:op pat)
+      :bind (when-not (symbol? (:sym pat))
+              (error :validate "Invalid bind node" (assoc ctx :path path)))
+      :seq-elems (when-not (:pat pat)
+                   (error :validate "Missing :pat in seq node" (assoc ctx :path path)))
+      :map-entries (do
+                     (when-not (:kpat pat)
+                       (error :validate "Missing :kpat in map-entry node" (assoc ctx :path path)))
+                     (when-not (:vpat pat)
+                       (error :validate "Missing :vpat in map-entry node" (assoc ctx :path path))))
+      :destructure nil
+      (error :validate "Unknown pattern op" (assoc ctx :path path)))
+    pat))
 
 (declare emit-with-pattern emit-pattern-value)
 
