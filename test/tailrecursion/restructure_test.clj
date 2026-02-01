@@ -1,6 +1,7 @@
 (ns tailrecursion.restructure-test
   (:require [clojure.test :refer [deftest is]]
-            [tailrecursion.restructure :refer [over compile-over over-plan]]
+            [tailrecursion.restructure :refer
+             [over over-> over->> compile-over over-plan]]
             [clojure.string :as str]
             [clojure.walk :as walk]))
 
@@ -24,6 +25,19 @@
   (let [data {:a [{:aa 1, :bb 2} {:cc 3}], :b [{:dd 4}]}
         result (over [{_ [{_ n}]} data] {n (cond-> n (even? n) inc)})]
     (is (= {:a [{:aa 1, :bb 3} {:cc 3}], :b [{:dd 5}]} result))))
+
+(deftest threading-helpers
+  (let [data {:a [{:aa 1, :bb 2} {:cc 3}], :b [{:dd 4}]}
+        out (-> data
+                (over-> [{_ [{_ n}]}] {n (cond-> n (even? n) inc)})
+                (assoc :touched true))]
+    (is (= {:a [{:aa 1, :bb 3} {:cc 3}], :b [{:dd 5}], :touched true} out)))
+  (let [data [1 2 3 4]
+        out (->> data
+                 (over->> [[n]] {n? (even? n), n n})
+                 (map inc)
+                 (into []))]
+    (is (= [3 5] out))))
 
 (deftest readme-example-2
   (let [users {:alice {:active true, :email "ALICE@EXAMPLE.COM"},

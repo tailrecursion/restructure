@@ -122,6 +122,34 @@
         wrapped (wrap-body body-node sources)]
     {:node (add-bindings wrapped bindings)}))
 
+(defn over->
+  [{:keys [node]}]
+  (let [args (rest (:children node))
+        topic-node (first args)
+        selector-node (second args)
+        body-node (nth args 2)
+        selector (api/sexpr selector-node)
+        body (api/sexpr body-node)
+        bindings (distinct (concat (selector-bindings selector)
+                                   (body-bindings body)))
+        sources (cons topic-node (selector-source-nodes selector-node))
+        wrapped (wrap-body body-node sources)]
+    {:node (add-bindings wrapped bindings)}))
+
+(defn over->>
+  [{:keys [node]}]
+  (let [args (rest (:children node))
+        selector-node (first args)
+        body-node (second args)
+        topic-node (nth args 2)
+        selector (api/sexpr selector-node)
+        body (api/sexpr body-node)
+        bindings (distinct (concat (selector-bindings selector)
+                                   (body-bindings body)))
+        sources (cons topic-node (selector-source-nodes selector-node))
+        wrapped (wrap-body body-node sources)]
+    {:node (add-bindings wrapped bindings)}))
+
 (defn compile-over
   [{:keys [node]}]
   (let [selector-node (macro-call->selector-node node)

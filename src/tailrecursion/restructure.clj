@@ -983,6 +983,28 @@
         source (:source (first (:steps sel-ast)))]
     `((compile-over ~sel ~body) ~source)))
 
+(defn- selector-with-topic
+  [topic sel]
+  (when-not (vector? sel)
+    (error :parse
+           "Selector must be a vector"
+           {:selector sel, :expected :vector}))
+  (when-not (odd? (count sel))
+    (error :parse
+           "Selector must omit first source when topic is provided"
+           {:selector sel, :expected :pattern-then-pairs}))
+  (let [p1 (first sel) rest (next sel)] (vec (concat [p1 topic] rest))))
+
+(defmacro over->
+  "Thread-first helper. Injects the threaded value as the first source."
+  [x sel body]
+  `(over ~(selector-with-topic x sel) ~body))
+
+(defmacro over->>
+  "Thread-last helper. Injects the threaded value as the first source."
+  [sel body x]
+  `(over ~(selector-with-topic x sel) ~body))
+
 (defn over-plan
   "Return the compiler plan for selector+body as data."
   [sel body]

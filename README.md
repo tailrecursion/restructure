@@ -8,8 +8,8 @@ Rewrite nested Clojure data with a declared shape.
 
 ```clojure
 (over selector body)         ; => rewritten value
-(compile-over selector body) ; => fn of one argument
-(over-plan selector body)    ; => compiler plan data
+(over-> value selector body) ; => rewritten value (thread-first helper)
+(over->> value selector body); => rewritten value (thread-last helper)
 ```
 
 ## Examples
@@ -33,6 +33,12 @@ Sequential example:
 (over [[n] [1 2 3]]
   {n? (even? n)})
 ;; => [2]
+```
+Threading helpers:
+```clojure
+(-> data
+    (over-> [{_ [{_ n}]}]
+            {n (cond-> n (even? n) inc)}))
 ```
 Map + vector traversal with one binding.
 
@@ -171,7 +177,6 @@ Plain Clojure is already a win when:
 
 ## Notes
 
-- `over-plan` returns the compiler plan as data. Useful for debugging.
 - Identity: if no effective change occurs (value equality at all rewritten
   points), `over` returns a result that is `identical?` to the input.
 - See [CLOS.md](CLOS.md) for the CLOS-style generic function system in this repo.
