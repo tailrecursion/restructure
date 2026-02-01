@@ -42,6 +42,17 @@
                   {line? (seq sku), qty (or qty 0)})]
     (is (= {:id 42, :lines [{:sku "A", :qty 2} {:sku "B", :qty 0}]} out))))
 
+(deftest topic-first-over
+  (let [data {:a [{:aa 1, :bb 2} {:cc 3}], :b [{:dd 4}]}
+        _ data
+        out (over data [{_ [{_ n}]}] {n (cond-> n (even? n) inc)})]
+    (is (= {:a [{:aa 1, :bb 3} {:cc 3}], :b [{:dd 5}]} out)))
+  (let [data {:a [{:aa 1, :bb 2} {:cc 3}], :b [{:dd 4}]}
+        _ data
+        out (-> data
+                (over [{_ [{_ n}]}] {n (cond-> n (even? n) inc)}))]
+    (is (= {:a [{:aa 1, :bb 3} {:cc 3}], :b [{:dd 5}]} out))))
+
 (deftest selector-type-hints
   (let [form (macroexpand '(compile-over [^long n ::input] {n (inc n)}))]
     (is (contains? (form-tags form "n") 'long)))
@@ -198,6 +209,8 @@
     (is (= :parse (:phase (exdata #(over-plan '[[a b] ::input] '{a a})))))
     (is (= :parse (:phase (exdata #(over-plan '[{{a b} ::input}] '{a a})))))
     (is (= :parse (:phase (exdata #(over-plan '[{[a] b} ::input] '{b b})))))
+    (is (thrown? clojure.lang.Compiler$CompilerException
+                 (eval '(over ::input [{_ n} ::input] {n n}))))
     (is (= :validate
            (:phase (exdata #(over-plan '[{_ n} x {y z} w] '{n n})))))))
 

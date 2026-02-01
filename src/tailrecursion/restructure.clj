@@ -956,12 +956,33 @@
   [sel body]
   (compile-over-form sel body))
 
+(defn- selector-with-topic
+  [topic sel]
+  (when-not (vector? sel)
+    (error :parse
+           "Selector must be a vector"
+           {:selector sel, :expected :vector}))
+  (when-not (odd? (count sel))
+    (error :parse
+           "Selector must omit first source when topic is provided"
+           {:selector sel, :expected :pattern-then-pairs}))
+  (let [p1 (first sel) rest (next sel)] (vec (concat [p1 topic] rest))))
+
 (defmacro over
-  "Apply a compiled selector+body to the selector's source expression."
-  [sel body]
-  (let [sel-ast (parse-selector sel)
-        source (:source (first (:steps sel-ast)))]
-    `((compile-over ~sel ~body) ~source)))
+  "Apply a compiled selector+body to the selector's source expression.
+
+   Arity:
+   - (over selector body)
+   - (over topic selector-without-first-source body)"
+  ([sel body]
+   (let [sel-ast (parse-selector sel)
+         source (:source (first (:steps sel-ast)))]
+     `((compile-over ~sel ~body) ~source)))
+  ([topic sel body]
+   (let [sel' (selector-with-topic topic sel)
+         sel-ast (parse-selector sel')
+         source (:source (first (:steps sel-ast)))]
+     `((compile-over ~sel' ~body) ~source))))
 
 (defn over-plan
   "Return the compiler plan for selector+body as data."

@@ -8,37 +8,55 @@
 
 (defn- guard->target [s] (subs s 0 (dec (count s))))
 
+(def ^:private destructure-special-keys #{:keys :strs :as :or})
+
+(defn- destructure-entry?
+  [[k v]]
+  (and (symbol? k)
+       (not (contains? destructure-special-keys k))
+       (or (keyword? v) (string? v))))
+
 (defn- destructure-map?
   [m]
   (and (map? m)
-       (or (contains? m :keys)
-           (contains? m :strs)
-           (contains? m :as)
-           (contains? m :or))))
+       (or (some #(contains? m %) destructure-special-keys)
+           (some destructure-entry? m))))
 
 (defn- pattern-bindings
   [pat]
   (cond (symbol? pat) (if (= '_ pat) [] [pat])
         (vector? pat) (if (= 1 (count pat)) (pattern-bindings (first pat)) [])
-        (map? pat) (if (destructure-map? pat)
-                     (let [ks (get pat :keys)
-                           ss (get pat :strs)
-                           as (get pat :as)]
-                       (concat (filter symbol? ks)
-                               (filter symbol? ss)
-                               (when (symbol? as) [as])))
-                     (when (= 1 (count pat))
-                       (let [[k v] (first pat)]
-                         (concat (pattern-bindings k) (pattern-bindings v)))))
+        (map? pat)
+          (if (destructure-map? pat)
+            (let [ks (get pat :keys)
+                  ss (get pat :strs)
+                  as (get pat :as)
+                  entries (->> pat
+                               (remove (fn [[k _]]
+                                         (contains? destructure-special-keys
+                                                    k)))
+                               (filter (fn [[k v]]
+                                         (and (symbol? k)
+                                              (or (keyword? v) (string? v))))))]
+              (concat (filter symbol? ks)
+                      (filter symbol? ss)
+                      (map first entries)
+                      (when (symbol? as) [as])))
+            (when (= 1 (count pat))
+              (let [[k v] (first pat)]
+                (concat (pattern-bindings k) (pattern-bindings v)))))
         :else []))
 
 (defn- selector-bindings
   [selector]
   (when (vector? selector)
-    (->> (partition 2 selector)
-         (map first)
-         (mapcat pattern-bindings)
-         (distinct))))
+    (let [patterns (if (odd? (count selector))
+                     (cons (first selector)
+                           (map first (partition 2 (rest selector))))
+                     (map first (partition 2 selector)))]
+      (->> patterns
+           (mapcat pattern-bindings)
+           (distinct)))))
 
 (defn- body-bindings
   [body]
@@ -66,11 +84,17 @@
 
 (defn- macro-call->body-node
   [form]
-  (let [args (rest (:children form))] (nth args 1)))
+  (let [args (rest (:children form))]
+    (if (= 2 (count args)) (nth args 1) (nth args 2))))
 
 (defn- macro-call->selector-node
   [form]
-  (let [args (rest (:children form))] (nth args 0)))
+  (let [args (rest (:children form))]
+    (if (= 2 (count args)) (nth args 0) (nth args 1))))
+
+(defn- macro-call->topic-node
+  [form]
+  (let [args (rest (:children form))] (when (= 3 (count args)) (nth args 0))))
 
 (defn- selector-source-nodes
   [selector-node]
@@ -88,11 +112,13 @@
   [{:keys [node]}]
   (let [selector-node (macro-call->selector-node node)
         body-node (macro-call->body-node node)
+        topic-node (macro-call->topic-node node)
         selector (api/sexpr selector-node)
         body (api/sexpr body-node)
         bindings (distinct (concat (selector-bindings selector)
                                    (body-bindings body)))
-        sources (selector-source-nodes selector-node)
+        sources (cond-> (selector-source-nodes selector-node)
+                  topic-node (cons topic-node))
         wrapped (wrap-body body-node sources)]
     {:node (add-bindings wrapped bindings)}))
 
