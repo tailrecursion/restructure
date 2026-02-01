@@ -9,8 +9,6 @@ Rewrite nested Clojure data with a declared shape.
 ```clojure
 (over selector body)         ; => rewritten value
 (over topic selector body)   ; => rewritten value (selector omits first source)
-(compile-over selector body) ; => fn of one argument
-(over-plan selector body)    ; => compiler plan data
 ```
 
 ## Examples
