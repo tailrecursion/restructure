@@ -122,6 +122,7 @@ A selector is a vector of alternating `pattern` and `source`:
 - **Map destructuring form:** `{:keys [...], :strs [...], :as sym, :or {...}}`
   - No traversal; binds keys and/or `:as`.
   - Nested destructuring inside `:keys`/`:strs` is rejected.
+  - Explicit key bindings are allowed, Clojure-style: `{user-id :id, org-id "org_id"}`
 - **Records** are treated as maps and may come back as plain maps after rewrite.
 
 Unsupported or ambiguous patterns are rejected with `ex-info` including `:phase`, `:path`, and `:pattern`.

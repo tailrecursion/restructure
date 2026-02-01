@@ -157,7 +157,24 @@
     (is (= :parse (:phase (exdata #(over-plan '[{_ {:as 1}} ::input] '{a a})))))
     (is (= :parse (:phase (exdata #(over-plan '[{_ {:or 1}} ::input] '{a a})))))
     (is (= :parse
-           (:phase (exdata #(over-plan '[{_ {:foo 1}} ::input] '{a a})))))))
+           (:phase (exdata #(over-plan '[{_ {:foo 1}} ::input] '{a a})))))
+    (is (= :parse
+           (:phase (exdata #(over-plan '[{_ {:keys [a], :b :b}} ::input]
+                                       '{a a})))))
+    (is (= :parse
+           (:phase (exdata #(over-plan '[{_ {:keys [a], b 1}} ::input]
+                                       '{a a})))))))
+
+(deftest destructure-renamed-keys
+  (let [user {:id 7, :name "Ana"}
+        out (over [{:keys [name], user-id :id} user] {user-id (inc user-id)})]
+    (is (= {:id 8, :name "Ana"} out)))
+  (let [data {"id" 7, "name" "Ana"}
+        out (over [{user-id "id"} data] {user-id (inc user-id)})]
+    (is (= {"id" 8, "name" "Ana"} out)))
+  (let [data {:id 7, :name "Ana"}
+        out (over [{:keys [name], user-id :id, :as m} data] {m? (seq name)})]
+    (is (= {:id 7, :name "Ana"} out))))
 
 (deftest body-errors
   (letfn [(exdata [f]

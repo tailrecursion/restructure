@@ -2,9 +2,7 @@
   (:require [clojure.test :refer [deftest is]]
             [tailrecursion.restructure.clos :as clos]))
 
-(defmacro thrown?
-  [cls & body]
-  `(try ~@body false (catch ~cls _# true)))
+(defmacro thrown? [cls & body] `(try ~@body false (catch ~cls _# true)))
 
 (clos/defgeneric dispatch)
 
@@ -34,22 +32,18 @@
 
 (clos/defmethod combo :before [(x Number)] (swap! combo-log conj [:before x]))
 (clos/defmethod combo :after [(x Number)] (swap! combo-log conj [:after x]))
-(clos/defmethod combo :around [(x Number)]
+(clos/defmethod combo :around
+  [(x Number)]
   (swap! combo-log conj [:around :enter x])
   (let [v (clos/call-next-method)]
     (swap! combo-log conj [:around :exit x])
     v))
-(clos/defmethod combo [(x Number)]
-  (swap! combo-log conj [:primary x])
-  (inc x))
+(clos/defmethod combo [(x Number)] (swap! combo-log conj [:primary x]) (inc x))
 
 (deftest standard-combination-order
   (reset! combo-log [])
   (is (= 2 (combo 1)))
-  (is (= [[:around :enter 1]
-          [:before 1]
-          [:primary 1]
-          [:after 1]
+  (is (= [[:around :enter 1] [:before 1] [:primary 1] [:after 1]
           [:around :exit 1]]
          @combo-log)))
 
@@ -79,10 +73,14 @@
 (clos/defmethod arity-check [(x Object)] :ok)
 
 (deftest arity-mismatch
-  (is (thrown? clojure.lang.ExceptionInfo
-               (binding [*ns* (the-ns 'tailrecursion.restructure-clos-test)]
-                 (eval '(tailrecursion.restructure.clos/defmethod arity-check
-                          [(x Object) (y Object)] :bad))))))
+  (is
+    (thrown?
+      clojure.lang.ExceptionInfo
+      (binding [*ns* (the-ns 'tailrecursion.restructure-clos-test)]
+        (eval '(tailrecursion.restructure.clos/defmethod
+                arity-check
+                [(x Object) (y Object)]
+                :bad))))))
 
 (clos/defgeneric node-kind)
 

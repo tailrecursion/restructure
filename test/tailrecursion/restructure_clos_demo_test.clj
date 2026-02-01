@@ -8,7 +8,8 @@
 
 (clos/defmethod describe-number :before [(x Number)] (str "before:" x))
 (clos/defmethod describe-number :after [(x Number)] (str "after:" x))
-(clos/defmethod describe-number :around [(x Number)]
+(clos/defmethod describe-number :around
+  [(x Number)]
   (str "[" (clos/call-next-method) "]"))
 (clos/defmethod describe-number [(x Long)] (str "long:" x))
 (clos/defmethod describe-number [(x Number)] (str "num:" x))
@@ -44,7 +45,8 @@
 
 (clos/defmethod stringify [(x (pred string?))] (str "s:" x))
 (clos/defmethod stringify [(x (pred number?))] (str "n:" x))
-(clos/defmethod stringify :around [(x (pred number?))]
+(clos/defmethod stringify :around
+  [(x (pred number?))]
   (str "<" (clos/call-next-method) ">"))
 
 (deftest demo-next-method

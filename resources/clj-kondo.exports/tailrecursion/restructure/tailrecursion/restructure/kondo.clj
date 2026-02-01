@@ -112,10 +112,9 @@
   [arglist]
   (->> arglist
        (mapcat (fn [arg]
-                 (cond
-                   (symbol? arg) [arg]
-                   (and (seq? arg) (symbol? (first arg))) [(first arg)]
-                   :else [])))))
+                 (cond (symbol? arg) [arg]
+                       (and (seq? arg) (symbol? (first arg))) [(first arg)]
+                       :else [])))))
 
 (defn defgeneric
   [{:keys [node]}]
@@ -133,14 +132,14 @@
         arg-node (nth children (if qual? 3 2))
         body-nodes (subvec children (if qual? 4 3))
         arg-syms (method-arg-syms (api/sexpr arg-node))
-        bindings (api/vector-node
-                   (mapcat (fn [s] [(api/token-node s) (api/token-node nil)])
-                     arg-syms))
+        bindings (api/vector-node (mapcat (fn [s] [(api/token-node s)
+                                                   (api/token-node nil)])
+                                    arg-syms))
         body (if (seq body-nodes) body-nodes [(api/token-node nil)])
-        wrapped (api/list-node
-                  (cons (api/token-node 'do)
-                        (concat body
-                                (map api/token-node arg-syms)
-                                [(api/token-node nil)])))
+        wrapped (api/list-node (cons (api/token-node 'do)
+                                     (concat body
+                                             (map api/token-node arg-syms)
+                                             [(api/token-node nil)])))
         node (api/list-node (list (api/token-node 'let) bindings wrapped))]
-    {:node (with-meta node {:clj-kondo/ignore [:type-mismatch :unused-value]})}))
+    {:node (with-meta node
+             {:clj-kondo/ignore [:type-mismatch :unused-value]})}))
