@@ -82,37 +82,6 @@
     coll
     (do (ensure-seqable coll path) (traverse-seq* coll f path))))
 
-(clos/defgeneric traverse-seq-no-elide*)
-
-(clos/defmethod traverse-seq-no-elide* [(coll (pred set?)) f _path]
-  (let [out (reduce (fn [acc x] (conj acc (f x))) (empty coll) coll)]
-    (if (equiv-with-meta? out coll) coll out)))
-
-(clos/defmethod traverse-seq-no-elide* [(coll (pred vector?)) f _path]
-  (let [cnt (count coll)
-        out (loop [i 0
-                   acc (transient [])]
-              (if (< i cnt)
-                (recur (inc i) (conj! acc (f (nth coll i))))
-                (persistent! acc)))]
-    (if (unchanged-coll? coll out) coll out)))
-
-(clos/defmethod traverse-seq-no-elide* [(coll (pred list?)) f _path]
-  (let [outv (reduce (fn [acc x] (conj acc (f x))) [] coll)
-        out (apply list outv)]
-    (if (unchanged-coll? coll outv) coll out)))
-
-(clos/defmethod traverse-seq-no-elide* [(coll (pred seq?)) f _path]
-  (let [outv (reduce (fn [acc x] (conj acc (f x))) [] coll)
-        out (seq outv)]
-    (if (unchanged-coll? coll outv) coll out)))
-
-(defn ^:no-doc traverse-seq-no-elide
-  "Traverse a sequential or set, applying f to each element. No elision."
-  [coll f path]
-  (if (nil? coll)
-    coll
-    (do (ensure-seqable coll path) (traverse-seq-no-elide* coll f path))))
 
 (defn ^:no-doc traverse-map
   "Traverse map entries, applying f to each entry.
@@ -133,22 +102,6 @@
                     (with-meta out (meta m)))]
           (if (= out m) m out)))))
 
-(defn ^:no-doc traverse-map-no-elide
-  "Traverse map entries, applying f to each entry. No elision."
-  [m f path]
-  (if (nil? m)
-    m
-    (do (ensure-map m path)
-        (let [base (if (record? m) {} (empty m))
-              out (reduce-kv (fn [acc k v]
-                               (let [r (f k v)]
-                                 (assoc acc (nth r 0) (nth r 1))))
-                             base
-                             m)
-              out (if (identical? (meta m) (meta out))
-                    out
-                    (with-meta out (meta m)))]
-          (if (equiv-with-meta? out m) m out)))))
 
 ;; Parsing / validation
 
@@ -970,39 +923,33 @@
 
 (clos/defmethod emit-traversal-fn [env (pat (key= :op :seq-elems))]
   (let [elem-sym (gensym "elem")
-        f-sym (gensym "seqnode")
-        trav-fn (if (:no-guards? env)
-                  'tailrecursion.restructure/traverse-seq-no-elide
-                  'tailrecursion.restructure/traverse-seq)]
+        f-sym (gensym "seqnode")]
     {:sym f-sym,
      :form `(fn [coll#]
-              (~trav-fn
-               coll#
-               (fn [~elem-sym] ~(emit-pattern-value env (:pat pat) elem-sym))
-               ~(node-path pat)))}))
+              (traverse-seq coll#
+                            (fn [~elem-sym]
+                              ~(emit-pattern-value env (:pat pat) elem-sym))
+                            ~(node-path pat)))}))
 
 (clos/defmethod emit-traversal-fn [env (pat (key= :op :map-entries))]
   (let [k-sym (gensym "k")
         v-sym (gensym "v")
-        f-sym (gensym "mapnode")
-        trav-fn (if (:no-guards? env)
-                  'tailrecursion.restructure/traverse-map-no-elide
-                  'tailrecursion.restructure/traverse-map)]
+        f-sym (gensym "mapnode")]
     {:sym f-sym,
      :form `(fn [m#]
-              (~trav-fn
-               m#
-               (fn [~k-sym ~v-sym]
-                 ~(emit-with-pattern env
-                                     (:kpat pat)
-                                     k-sym
-                                     (fn [kval]
-                                       (emit-with-pattern env
-                                                          (:vpat pat)
-                                                          v-sym
-                                                          (fn [vval]
-                                                            `[~kval ~vval])))))
-               ~(node-path pat)))}))
+              (traverse-map m#
+                            (fn [~k-sym ~v-sym]
+                              ~(emit-with-pattern env
+                                                  (:kpat pat)
+                                                  k-sym
+                                                  (fn [kval]
+                                                    (emit-with-pattern
+                                                      env
+                                                      (:vpat pat)
+                                                      v-sym
+                                                      (fn [vval]
+                                                        `[~kval ~vval])))))
+                            ~(node-path pat)))}))
 
 (clos/defmethod emit-traversal-fn [_env _pat] nil)
 
@@ -1050,35 +997,13 @@
                                 (:guards body-pass)
                                 (:steps parse-pass)))))
 
-(defn- pass-prune-noop-rewrites
-  [ctx]
-  (let [bindings (:bindings (:binding-pass ctx))]
-    (update-in ctx
-               [:body-pass :rewrites]
-               (fn [m]
-                 (reduce-kv
-                   (fn [acc k v]
-                     (let [kind (:kind (get bindings k))]
-                       (if (and (= k v) (= :value kind)) acc (assoc acc k v))))
-                   {}
-                   m)))))
-
 (def ^:private plan-passes
-  [pass-parse pass-bindings pass-body pass-prune-noop-rewrites pass-conflicts
-   pass-usage])
+  [pass-parse pass-bindings pass-body pass-conflicts pass-usage])
 
 (defn- plan-over*
   "Compile-time planner: parse, validate, and analyze selector/body into a plan."
   [sel body]
   (let [ctx (run-passes {:sel sel, :body body} plan-passes)] (make-plan ctx)))
-
-(defn- codegen-opt-flags
-  [ctx]
-  (let [plan (:plan ctx)
-        rewrites (:rewrites plan)
-        guards (:guards plan)]
-    (assoc ctx
-      :opt {:no-rewrites? (empty? rewrites), :no-guards? (empty? guards)})))
 
 (defn- codegen-fast-path
   [ctx]
@@ -1106,8 +1031,7 @@
                            nodes))
           env (assoc plan
                 :node-fns node-fns
-                :binding-children (:binding-children trav)
-                :no-guards? (get-in ctx [:opt :no-guards?]))]
+                :binding-children (:binding-children trav))]
       (assoc ctx
         :trav trav
         :nodes nodes
@@ -1141,8 +1065,7 @@
                  (fn [~input-sym] ~root-expr))))))
 
 (def ^:private codegen-passes
-  [codegen-opt-flags codegen-fast-path codegen-annotate codegen-lower
-   codegen-emit])
+  [codegen-fast-path codegen-annotate codegen-lower codegen-emit])
 
 (defn- codegen*
   "Generate a compiled function form from a plan."
