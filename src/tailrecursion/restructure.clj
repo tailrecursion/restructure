@@ -44,7 +44,10 @@
   (let [out (reduce (fn [acc x]
                       (let [y (f x)] (if (elide? y) acc (conj acc y))))
               (empty coll)
-              coll)]
+              coll)
+        out (if (identical? (meta coll) (meta out))
+              out
+              (with-meta out (meta coll)))]
     (if (= out coll) coll out)))
 
 (clos/defmethod traverse-seq* [(coll (pred vector?)) f _path]
@@ -55,15 +58,21 @@
                 (let [x (nth coll i)
                       y (f x)]
                   (recur (inc i) (if (elide? y) acc (conj! acc y))))
-                (persistent! acc)))]
-    (if (unchanged-coll? coll out) coll out)))
+                (persistent! acc)))
+        out' (if (identical? (meta coll) (meta out))
+               out
+               (with-meta out (meta coll)))]
+    (if (unchanged-coll? coll out') coll out')))
 
 (clos/defmethod traverse-seq* [(coll (pred list?)) f _path]
   (let [outv (reduce (fn [acc x]
                        (let [y (f x)] (if (elide? y) acc (conj acc y))))
                []
                coll)
-        out (apply list outv)]
+        out (apply list outv)
+        out (if (identical? (meta coll) (meta out))
+              out
+              (with-meta out (meta coll)))]
     (if (unchanged-coll? coll outv) coll out)))
 
 (clos/defmethod traverse-seq* [(coll (pred seq?)) f _path]
@@ -71,7 +80,10 @@
                        (let [y (f x)] (if (elide? y) acc (conj acc y))))
                []
                coll)
-        out (seq outv)]
+        out (seq outv)
+        out (if (and out (identical? (meta coll) (meta out)))
+              out
+              (if out (with-meta out (meta coll)) out))]
     (if (unchanged-coll? coll outv) coll out)))
 
 (defn ^:no-doc traverse-seq
@@ -91,16 +103,24 @@
     m
     (do (ensure-map m path)
         (let [base (if (record? m) {} (empty m))
-              out (reduce-kv
-                    (fn [acc k v]
-                      (let [r (f k v)]
-                        (if (elide? r) acc (assoc acc (nth r 0) (nth r 1)))))
-                    base
-                    m)
+              [out changed?] (reduce-kv
+                               (fn [[acc changed?] k v]
+                                 (let [r (f k v)]
+                                   (if (elide? r)
+                                     [acc true]
+                                     (let [k2 (nth r 0)
+                                           v2 (nth r 1)
+                                           changed?
+                                             (or changed?
+                                                 (not (equiv-with-meta? k2 k))
+                                                 (not (equiv-with-meta? v2 v)))]
+                                       [(assoc acc k2 v2) changed?]))))
+                               [base false]
+                               m)
               out (if (identical? (meta m) (meta out))
                     out
                     (with-meta out (meta m)))]
-          (if (= out m) m out)))))
+          (if (not changed?) m out)))))
 
 
 ;; Parsing / validation
@@ -277,6 +297,10 @@
                     "Only symbols, &, and :as are supported in seq destructure"
                     v)))))))
 
+(defn- strip-underscore-meta
+  [v]
+  (mapv (fn [x] (if (and (symbol? x) (= "_" (name x))) (with-meta x nil) x)) v))
+
 (p/define-parser
   seq-destructure-parser
   (p/map-result
@@ -290,7 +314,10 @@
           (error :parse
                  "Seq destructure requires a vector"
                  {:path path, :pattern form, :expected :vector}))
-        (make-seq-elems (make-seq-destructure v (conj path 1) form) path form)))
+        (let [v' (strip-underscore-meta v)]
+          (make-seq-elems (make-seq-destructure v' (conj path 1) form)
+                          path
+                          form))))
     (p/satisfy #(and (seq? (:form %)) (= 'seq (first (:form %)))))))
 
 (p/define-parser
@@ -780,28 +807,32 @@
 (defn- destructure-as
   [ctx]
   (let [{:keys [env as m1# body-fn]} ctx
-        as-expr
-          (if as
-            (let [as-children (get-in env [:binding-children as])
-                  as-guard-present? (contains? (:guards env) as)
-                  as-guard (get-in env [:guards as])
-                  as-rewrite-present? (contains? (:rewrites env) as)
-                  as-rewrite (get-in env [:rewrites as])
-                  as-drop-sym (gensym "as_drop")
-                  as-val-sym (gensym "as_val")
-                  as-child-expr (if (seq as-children)
-                                  (emit-apply-children env as as-children)
-                                  as)
-                  as-guard-expr (if as-guard-present? as-guard true)
-                  as-rewrite-expr (if as-rewrite-present? as-rewrite as)
-                  elide?-sym 'tailrecursion.restructure/elide?
-                  elide-sym 'tailrecursion.restructure/elide]
-              (list 'let
-                    [as m1# as as-child-expr as-drop-sym
-                     (list 'or (list elide?-sym as) (list 'not as-guard-expr))
-                     as (list 'if as-drop-sym as as-rewrite-expr) as-val-sym as]
-                    (list 'if as-drop-sym elide-sym (body-fn as-val-sym))))
-            (body-fn m1#))]
+        as-expr (if as
+                  (let [as-children (get-in env [:binding-children as])
+                        as-guard-present? (contains? (:guards env) as)
+                        as-guard (get-in env [:guards as])
+                        as-rewrite-present? (contains? (:rewrites env) as)
+                        as-rewrite (get-in env [:rewrites as])
+                        as-drop-sym (gensym "as_drop")
+                        as-rewrite-sym (gensym "as_rewrite")
+                        as-val-sym (gensym "as_val")
+                        as-child-expr (if (seq as-children)
+                                        (emit-apply-children env as as-children)
+                                        as)
+                        as-guard-expr (if as-guard-present? as-guard true)
+                        as-rewrite-expr (if as-rewrite-present? as-rewrite as)
+                        elide?-sym 'tailrecursion.restructure/elide?
+                        elide-sym 'tailrecursion.restructure/elide]
+                    (list
+                      'let
+                      [as m1# as as-child-expr as-rewrite-sym as-rewrite-expr
+                       as-drop-sym
+                       (list 'or
+                             (list elide?-sym as-rewrite-sym)
+                             (list 'not as-guard-expr)) as
+                       (list 'if as-drop-sym as as-rewrite-sym) as-val-sym as]
+                      (list 'if as-drop-sym elide-sym (body-fn as-val-sym))))
+                  (body-fn m1#))]
     (assoc ctx :as-expr as-expr)))
 
 (defn- destructure-emit

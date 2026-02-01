@@ -11,6 +11,8 @@
   [cls re & body]
   `(try ~@body false (catch ~cls e# (boolean (re-find ~re (.getMessage e#))))))
 
+(defn- exdata [f] (try (f) (catch clojure.lang.ExceptionInfo e (ex-data e))))
+
 (defn- form-tags
   [form sym-name]
   (let [tags (atom #{})]
@@ -39,6 +41,32 @@
                  (into []))]
     (is (= [3 5] out))))
 
+(deftest threading-helpers-multi-step
+  (let [data {:a [{:x 1} {:x 2}], :b [{:x 3}]}
+        out (-> data
+                (over-> [{_ [{:keys [x]}]}] {x (inc x)})
+                (over-> [{_ [{:keys [x]}]}] {x (* x 2)})
+                (assoc :done true))]
+    (is (= {:a [{:x 4} {:x 6}], :b [{:x 8}], :done true} out)))
+  (let [data [1 2 3 4]
+        out (->> data
+                 (over->> [[n]] {n? (odd? n), n (* n 2)})
+                 (map inc)
+                 (over->> [[n]] {n? (>= n 5), n (dec n)})
+                 (into []))]
+    (is (= [6] out))))
+
+(deftest threading-helpers-multiple-sources
+  (let [data {:a {:x 1}, :b {:x 2}}
+        out (-> data
+                (over-> [{:keys [a]} {:keys [x]} a] {x (inc x)}))]
+    (is (= {:a {:x 2}, :b {:x 2}} out)))
+  (let [data [[1 2] [3]]
+        out (->> data
+                 (over->> [[m] [n] m] {n (inc n)})
+                 (into []))]
+    (is (= [[2 3] [4]] out))))
+
 (deftest seq-destructure
   (let [data [[:x 1] [:y 2]]
         out (over [(seq [k v]) data] {v (inc v)})]
@@ -46,9 +74,26 @@
   (let [data [[1 2 3] [4 5 6]]
         out (over [(seq [a b & more]) data] {b (inc b)})]
     (is (= [[1 3 3] [4 6 6]] out)))
+  (let [data [[1 2 3] [4 5 6]]
+        out (over [(seq [a b & more]) data] {more (mapv inc more)})]
+    (is (= [[1 2 4] [4 5 7]] out)))
   (let [data [[1 2] [3 5]]
         out (over [(seq [a b]) data] {b? (odd? b), b b})]
-    (is (= [[3 5]] out))))
+    (is (= [[3 5]] out)))
+  (let [data [[1 2 3] [4 5]]
+        out (over [(seq [a b & more :as all]) data]
+                  {all (vec (concat [b a] more))})]
+    (is (= [[2 1 3] [5 4]] out)))
+  (let [data [[1] [1 2] [1 2 3]]
+        out (over [(seq [a & more]) data] {more? (seq more), a a})]
+    (is (= [[1 2] [1 2 3]] out)))
+  (let [data [[1]]
+        out (over [(seq [a b]) data] {b (or b 0)})]
+    (is (= [[1 0]] out)))
+  (let [data []
+        out (over [(seq [a b]) data] {a a})]
+    (is (= [] out))
+    (is (identical? data out))))
 
 (deftest readme-example-2
   (let [users {:alice {:active true, :email "ALICE@EXAMPLE.COM"},
@@ -108,7 +153,11 @@
   (let [form (macroexpand
                '(compile-over [{:keys [^long x]} ::input] {x? (pos? x)}))]
     (is (contains? (form-tags form "x") 'long))
-    (is (empty? (form-tags form "x?")))))
+    (is (empty? (form-tags form "x?"))))
+  (let [form (macroexpand
+               '(compile-over [(seq [^long a ^String b]) ::input] {a a, b b}))]
+    (is (contains? (form-tags form "a") 'long))
+    (is (some #{'String String java.lang.String} (form-tags form "b")))))
 
 (deftest identity-when-unchanged
   (let [data {:a ["x" "y"], :b {:c "z"}}
@@ -123,6 +172,27 @@
   (let [data {:a #{"x" "y"}}
         out (over [{:keys [a]} data [s] a] {s (str s)})]
     (is (identical? data out))))
+
+(deftest identity-when-meta-changes
+  (let [data (with-meta {:x 1} {:m 1})
+        out (over [m data] {m (with-meta m {:m 2})})]
+    (is (= {:x 1} out))
+    (is (= {:m 2} (meta out)))
+    (is (not (identical? data out)))))
+
+(deftest identity-when-nested-meta-changes
+  (let [inner (with-meta {:x 1} {:m 1})
+        data {:a inner}
+        out (over [{_ v} data] {v (with-meta v {:m 2})})]
+    (is (= {:a {:x 1}} out))
+    (is (= {:m 2} (meta (:a out))))
+    (is (not (identical? data out)))))
+
+(deftest guard-var-capture
+  (let [data {:x 1}
+        out (over [{:keys [x]} data]
+                  {x? (pos? x), x (let [x? :shadow] [x x?])})]
+    (is (= {:x [1 :shadow]} out))))
 
 (deftest example-2
   (let [users {:alice {:active true,
@@ -177,6 +247,12 @@
         out (over [{_ {:keys [b], :or {b 10}}} data] {})]
     (is (= {:u {:a 1}} out))))
 
+(deftest or-defaults-guard-false
+  (let [data {:u {}}
+        out (over [{_ {:keys [b], :or {b 10}}} data] {b? false})]
+    (is (= {:u {}} out))
+    (is (identical? data out))))
+
 (deftest as-update-idiom
   (let [data {:u {:x 1, :y 2}}
         out (over [{_ {:as m}} data]
@@ -205,6 +281,11 @@
   (let [data {:a 1, :b 2}
         result (over [{k v} data] {})]
     (is (identical? data result))))
+
+(deftest map-entry-identity-on-no-change
+  (let [data (with-meta {:a 1, :b 2} {:m 1})
+        out (over [{k v} data] {k k, v v})]
+    (is (identical? data out))))
 
 (deftest type-preservation
   (let [data [1 2 3]
@@ -403,6 +484,9 @@
             (try (f) (catch clojure.lang.ExceptionInfo e (ex-data e))))]
     (let [data (exdata #(over [[n] "abc"] {n n}))]
       (is (= :runtime (:phase data)))
+      (is (= :seqable (:expected data))))
+    (let [data (exdata #(over [(seq [k v]) 1] {v v}))]
+      (is (= :runtime (:phase data)))
       (is (= :seqable (:expected data))))))
 
 (deftest conflict-errors
@@ -437,3 +521,241 @@
         out (over [{_ {:keys [x], :as v}} data] {x (inc x)})]
     (is (= {:a {:x 2}} out))
     (is (= {:m 1} (meta (:a out))))))
+
+(deftest selector-and-pattern-parse-errors
+  (is (= :parse (:phase (exdata #(over-plan '{_ n} '{n n})))))
+  (is (= :parse (:phase (exdata #(over-plan '[{_ n} ::input _] '{n n})))))
+  (is (= :parse (:phase (exdata #(over-plan '[{{a b} ::input}] '{a a})))))
+  (is (= :parse (:phase (exdata #(over-plan '[{_ {:keys a}} ::input] '{a a})))))
+  (is (= :parse (:phase (exdata #(over-plan '[{_ {:strs a}} ::input] '{a a})))))
+  (is (= :parse (:phase (exdata #(over-plan '[{_ {:or 1}} ::input] '{a a})))))
+  (is (= :parse (:phase (exdata #(over-plan '[{_ {:as 1}} ::input] '{a a})))))
+  (is (= :parse
+         (:phase (exdata #(over-plan '[{_ {:keys [a 1]}} ::input] '{a a})))))
+  (is (= :parse
+         (:phase (exdata #(over-plan '[{_ {:strs [a 1]}} ::input] '{a a})))))
+  (is (= :parse
+         (:phase (exdata #(over-plan '[{_ {:keys [a], 1 :x}} ::input]
+                                     '{a a})))))
+  (is (= :validate
+         (:phase (exdata #(over-plan '[{_ {:keys [a], a :a}} ::input]
+                                     '{a a}))))))
+
+(deftest body-validation-more
+  (is (= :validate (:phase (exdata #(over-plan '[{_ n} ::input] '(n))))))
+  (is (= :validate (:phase (exdata #(over-plan '[{_ n} ::input] '[n])))))
+  (is (= :validate (:phase (exdata #(over-plan '[{_ n} ::input] '{:k 1})))))
+  (is (= :validate (:phase (exdata #(over-plan '[{_ n} ::input] '{a/b 1})))))
+  (is (= :validate (:phase (exdata #(over-plan '[{_ n} ::input] '{m? true})))))
+  (is (= :validate (:phase (exdata #(over-plan '[{_ n} ::input] '{m 1})))))
+  (is (= :validate (:phase (exdata #(over-plan '[{_ _} ::input] '{_? true})))))
+  (is (= :validate (:phase (exdata #(over-plan '[{_ _} ::input] '{_ 1}))))))
+
+(deftest guard-semantics
+  (let [data {:a 1, :b 2}
+        out (over [{k v} data] {v? (if (= k :a) 0 nil)})]
+    (is (= {:a 1} out)))
+  (let [cnt (atom 0)
+        data [1 2 3]
+        out (over [[n] data] {n? (do (swap! cnt inc) true)})]
+    (is (= [1 2 3] out))
+    (is (= 3 @cnt)))
+  (let [cnt (atom 0)
+        data {:a {:x 1}}
+        out (over [{_ {:keys [x], :as m}} data]
+                  {m? false, x? (do (swap! cnt inc) true)})]
+    (is (= {} out))
+    (is (= 1 @cnt))))
+
+(deftest rewrite-semantics
+  (let [data {:a 1}
+        out (over [m data] {m tailrecursion.restructure/elide})]
+    (is (= tailrecursion.restructure/elide out)))
+  (let [data {:a 1, :b 2}
+        out (over [{k v} data] {v tailrecursion.restructure/elide})]
+    (is (= {:a tailrecursion.restructure/elide,
+            :b tailrecursion.restructure/elide}
+           out)))
+  (let [data [1 2 3]
+        out (over [[n] data] {n tailrecursion.restructure/elide})]
+    (is (= [] out)))
+  (let [data {:a 1}
+        out (over [{k v} data] {k tailrecursion.restructure/elide})]
+    (is (= {:tailrecursion.restructure/elide 1} out)))
+  (let [data {:a 1} out (over [{k v} data] {v 1N})] (is (identical? data out)))
+  (let [data {:a 1M}
+        out (over [{k v} data] {v 1})]
+    (is (= {:a 1} out))
+    (is (not (identical? data out)))))
+
+(deftest identity-and-sharing-more
+  (let [inner (with-meta {:x 1} {:m 1})
+        data {:a 1, :b inner}
+        out (over [{:keys [a]} data] {a a})]
+    (is (identical? data out))
+    (is (identical? (:b data) (:b out))))
+  (let [data {:a 1, :b 2}
+        out (over [{k v} data] {v? true})]
+    (is (identical? data out)))
+  (let [data [{:x 1} {:x 2}]
+        out (over [[{:keys [x]}] data] {x (inc x)})]
+    (is (= [{:x 2} {:x 3}] out))
+    (is (not (identical? (nth data 0) (nth out 0))))
+    (is (not (identical? (nth data 1) (nth out 1)))))
+  (let [data [{:x 1} {:x 2}]
+        out (over [[{:keys [x]}] data] {x? (= x 1), x (inc x)})]
+    (is (= [{:x 2} {}] out)))
+  (let [data [{:x 1} {:x 2}]
+        out (over [[{:keys [x]}] data] {x (if (= x 1) (inc x) x)})]
+    (is (= [{:x 2} {:x 2}] out))
+    (is (identical? (nth data 1) (nth out 1)))))
+
+(deftest map-traversal-more
+  (let [data (array-map :b 1 :a 0)
+        out (over [{k v} data] {k (if (= k :b) :a k), v? (pos? v)})]
+    (is (= {:a 1} out)))
+  (let [data {:a {:x 1}}
+        out (over [{_ {:keys [a], :as m}} data]
+                  {m tailrecursion.restructure/elide})]
+    (is (= {} out)))
+  (let [data {"a" 1}
+        out (over [{:strs [a], :keys [b], :or {b 2}} data] {a a, b b})]
+    (is (= {"a" 1, :b 2} out)))
+  (let [data {:id 1}
+        out (over [{user-id :id, :or {user-id 7}} data] {user-id user-id})]
+    (is (= {:id 1} out)))
+  (let [data {:id nil}
+        out (over [{user-id :id, :or {user-id 7}} data] {user-id user-id})]
+    (is (= {:id nil} out)))
+  (let [data {:id nil}
+        out (over [{user-id :id, :or {user-id 7}} data]
+                  {user-id? false, user-id user-id})]
+    (is (= {} out)))
+  (let [data {:a {:x 1}}
+        out (over [{_ {:keys [x], :as m}} data] {x (inc x)})]
+    (is (= {:a {:x 2}} out))))
+
+(deftest seq-traversal-more
+  (let [data [1 nil 3]
+        out (over [[n] data] {n n})]
+    (is (= [1 nil 3] out))
+    (is (identical? data out)))
+  (let [data [{:x 1} {:x 2}]
+        out (over [[{:keys [x]}] data] {x (inc x)})]
+    (is (= [{:x 2} {:x 3}] out)))
+  (let [data [1 2 3]
+        out (over [[n] data] {n? (odd? n), n (inc n)})]
+    (is (= [2 4] out)))
+  (let [data #{1 2 3} out (over [[n] data] {n (inc n)})] (is (= #{2 3 4} out)))
+  (let [data (exdata #(over [[n] "abc"] {n n}))]
+    (is (= :runtime (:phase data)))
+    (is (= :seqable (:expected data))))
+  (let [data (exdata #(over [[n] {:a 1}] {n n}))]
+    (is (= :runtime (:phase data)))
+    (is (= :seqable (:expected data)))))
+
+(deftest seq-destructure-more
+  (let [data [[1 2]]
+        out (over [(seq [a b :as all]) data] {all? false})]
+    (is (= [] out)))
+  (let [data [[1 2 3]]
+        out (over [(seq [a b & more]) data] {more []})]
+    (is (= [[1 2]] out)))
+  (let [data [[1 2 3]]
+        out (over [(seq [a b & more]) data] {more nil})]
+    (is (= [[1 2]] out)))
+  (let [data [[1 2 3]]
+        out (over [(seq [a b & more]) data] {more '(9 8)})]
+    (is (= [[1 2 9 8]] out)))
+  (let [data [[1]]
+        out (over [(seq [a b]) data] {b? (nil? b), b (or b 0)})]
+    (is (= [[1 0]] out)))
+  (let [data [[1 2]]
+        out (over [(seq [_ b]) data] {b (inc b)})]
+    (is (= [[1 3]] out)))
+  (let [data [[1 2 3]]
+        out (over [(seq [a b & _]) data] {a (inc a)})]
+    (is (= [[2 2 3]] out)))
+  (let [form (macroexpand '(compile-over [(seq [^long _ a]) ::input] {a a}))]
+    (is (contains? (form-tags form "_") 'long))))
+
+(deftest threading-macroexpansion-more
+  (let [data [1 2 3]
+        out (->> data
+                 (over->> [[n]] {n (inc n)})
+                 (over->> [[n]] {n (inc n)})
+                 (into []))]
+    (is (= [3 4 5] out)))
+  (let [data {:a 1}
+        out (-> data
+                (over-> [{:keys [a]}] {a (inc a)})
+                (over-> [{:keys [a]}] {a (inc a)}))]
+    (is (= {:a 3} out)))
+  (let [data {:a 1}
+        out (as-> data v (over-> v [{:keys [a]}] {a (inc a)}))]
+    (is (= {:a 2} out)))
+  (let [data [1 2 3]
+        out (->> data
+                 (#(over-> % [[n]] {n (inc n)}))
+                 (into []))]
+    (is (= [2 3 4] out)))
+  (let [data [1 2 3]
+        out (-> data
+                (#(over->> [[n]] {n (inc n)} %))
+                (into []))]
+    (is (= [2 3 4] out))))
+
+(deftest compile-over-macroexpansion-more
+  (let [form (macroexpand
+               '(compile-over [{:as ^String m, :keys [a]} ::input] {m m}))]
+    (is (some #{'String String java.lang.String} (form-tags form "m"))))
+  (let [form (macroexpand
+               '(compile-over [{^long user-id :id} ::input] {user-id user-id}))]
+    (is (contains? (form-tags form "user-id") 'long)))
+  (let [form (macroexpand '(compile-over
+                            [(seq [a b & more :as all]) ::input]
+                            {a a, all all}))
+        syms (filter symbol? (tree-seq coll? seq form))]
+    (is (every? (set syms) ['a 'b 'more 'all]))
+    (is (empty? (filter #(contains? #{'a 'b 'more 'all} %)
+                  (filter (fn [s] (.contains (name s) "__")) syms)))))
+  (let [form (macroexpand
+               '(compile-over [{:keys [^long x]} ::input] {x? (pos? x)}))]
+    (is (empty? (form-tags form "x?")))))
+
+(deftest data-type-preservation-more
+  (defrecord R2 [a])
+  (let [r (->R2 1) out (over [{k v} r] {v v})] (is (identical? r out)))
+  (let [m (sorted-map :b 2 :a 1)
+        out (over [{k v} m] {v v})]
+    (is (identical? m out)))
+  (let [m (array-map :b 2 :a 1)
+        out (over [{k v} m] {v v})]
+    (is (= (seq m) (seq out)))
+    (is (identical? m out)))
+  (let [tm (transient {:a 1})
+        data (exdata #(over [{k v} tm] {v v}))]
+    (is (= :runtime (:phase data)))
+    (is (= :map (:expected data))))
+  (let [v (with-meta [1 2] {:m 1})
+        out (over [[n] v] {n (inc n)})]
+    (is (= [2 3] out))
+    (is (= {:m 1} (meta out))))
+  (let [l (with-meta (list 1 2) {:m 1})
+        out (over [[n] l] {n (inc n)})]
+    (is (= '(2 3) out))
+    (is (= {:m 1} (meta out))))
+  (let [s (with-meta #{1 2} {:m 1})
+        out (over [[n] s] {n (inc n)})]
+    (is (= #{2 3} out))
+    (is (= {:m 1} (meta out)))))
+
+(deftest plan-and-compile-determinism
+  (let [p1 (over-plan '[{_ n} ::input] '{n (inc n)})
+        p2 (over-plan '[{_ n} ::input] '{n (inc n)})]
+    (is (= p1 p2)))
+  (let [data {:a 1}
+        f (compile-over [{_ n} ::input] {n (inc n)})
+        out1 (f data)
+        out2 (over [{_ n} data] {n (inc n)})]
+    (is (= out1 out2))))

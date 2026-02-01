@@ -128,7 +128,10 @@
     (let [method (first methods)
           next-fn (method-chain (rest methods) base)]
       (fn [& args]
-        (binding [*next-methods* (if next-fn (list next-fn) nil)
+        (binding [*next-methods*
+                    (if (and next-fn (not (identical? next-fn no-next-method)))
+                      (list next-fn)
+                      nil)
                   *next-method-args* args]
           (apply (:fn method) args))))))
 
