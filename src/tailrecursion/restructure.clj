@@ -33,7 +33,7 @@
 
 (defn- unchanged-coll?
   [coll out]
-  (and (= (count coll) (count out)) (every? true? (map identical? coll out))))
+  (and (= (count coll) (count out)) (every? true? (map = coll out))))
 
 (clos/defgeneric traverse-seq*)
 
@@ -593,7 +593,9 @@
                      (let [~sym ~v#]
                        (let [keep?# ~(if guard-present? guard-expr true)]
                          (if keep?#
-                           (let [~sym ~(if rewrite-present? rewrite-expr sym)
+                           (let [rewrite#
+                                   ~(if rewrite-present? rewrite-expr sym)
+                                 ~sym (if (= rewrite# ~sym) ~sym rewrite#)
                                  ~out# ~sym]
                              ~(body-fn out#))
                            elide))))))))
@@ -658,39 +660,49 @@
   [ctx]
   (let [{:keys [env all-syms key-drop-syms]} ctx
         key-bindings
-          (vec
-            (mapcat
-              (fn [s]
-                (let [guard-present? (contains? (:guards env) s)
-                      guard-expr (get-in env [:guards s])
-                      rewrite-present? (contains? (:rewrites env) s)
-                      rewrite-expr (get-in env [:rewrites s])
-                      drop-sym (get key-drop-syms s)]
-                  [drop-sym
-                   `(or (elide? ~s) (not ~(if guard-present? guard-expr true)))
-                   s `(if ~drop-sym ~s ~(if rewrite-present? rewrite-expr s))]))
-              all-syms))]
+          (vec (mapcat (fn [s]
+                         (let [guard-present? (contains? (:guards env) s)
+                               guard-expr (get-in env [:guards s])
+                               rewrite-present? (contains? (:rewrites env) s)
+                               rewrite-expr (get-in env [:rewrites s])
+                               drop-sym (get key-drop-syms s)
+                               rewrite-sym (gensym (str (name s) "_rewrite"))]
+                           [drop-sym
+                            `(or (elide? ~s)
+                                 (not ~(if guard-present? guard-expr true)))
+                            rewrite-sym (if rewrite-present? rewrite-expr s) s
+                            `(if ~drop-sym
+                               ~s
+                               (if (= ~rewrite-sym ~s) ~s ~rewrite-sym))]))
+                 all-syms))]
     (assoc ctx :key-bindings key-bindings)))
 
 (defn- destructure-map
   [ctx]
   (let [{:keys [env all-syms key->k v# had-syms key-drop-syms]} ctx
         m1# (gensym "m1")
-        map-bindings (vec (reduce (fn [acc s]
-                                    (let [drop-sym (get key-drop-syms s)
-                                          had? (get had-syms s)
-                                          k (get key->k s)
-                                          rewrite? (contains? (:rewrites env)
-                                                              s)]
-                                      (conj acc
-                                            m1#
-                                            `(if ~drop-sym
-                                               (if ~had? (dissoc ~m1# ~k) ~m1#)
-                                               (if (or ~had? ~rewrite?)
-                                                 (assoc ~m1# ~k ~s)
-                                                 ~m1#)))))
-                            [m1# v#]
-                            all-syms))]
+        map-bindings (vec
+                       (conj (reduce
+                               (fn [acc s]
+                                 (let [drop-sym (get key-drop-syms s)
+                                       had? (get had-syms s)
+                                       k (get key->k s)
+                                       rewrite? (contains? (:rewrites env) s)
+                                       orig (gensym (str (name s) "_orig"))]
+                                   (conj acc
+                                         orig
+                                         `(get ~v# ~k)
+                                         m1#
+                                         `(if ~drop-sym
+                                            (if ~had? (dissoc ~m1# ~k) ~m1#)
+                                            (if (or ~rewrite?
+                                                    (and ~had? (not= ~s ~orig)))
+                                              (assoc ~m1# ~k ~s)
+                                              ~m1#)))))
+                               [m1# v#]
+                               all-syms)
+                             m1#
+                             `(if (= ~m1# ~v#) ~v# ~m1#)))]
     (assoc ctx
       :map-bindings map-bindings
       :m1# m1#)))

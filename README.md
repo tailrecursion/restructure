@@ -172,6 +172,8 @@ Plain Clojure is already a win when:
 ## Notes
 
 - `over-plan` returns the compiler plan as data. Useful for debugging.
+- Identity: if no effective change occurs (value equality at all rewritten
+  points), `over` returns a result that is `identical?` to the input.
 - See [CLOS.md](CLOS.md) for the CLOS-style generic function system in this repo.
 
 ## Running tests

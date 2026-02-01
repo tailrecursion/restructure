@@ -96,6 +96,20 @@
     (is (contains? (form-tags form "x") 'long))
     (is (empty? (form-tags form "x?")))))
 
+(deftest identity-when-unchanged
+  (let [data {:a ["x" "y"], :b {:c "z"}}
+        out (over [{:keys [a b]} data [s] a] {s (str s)})]
+    (is (identical? data out)))
+  (let [data {:a "x"}
+        out (over [{k v} data] {v (str v)})]
+    (is (identical? data out)))
+  (let [data {:a [{:x "x"}]}
+        out (over [{_ [{:keys [x]}]} data] {x (str x)})]
+    (is (identical? data out)))
+  (let [data {:a #{"x" "y"}}
+        out (over [{:keys [a]} data [s] a] {s (str s)})]
+    (is (identical? data out))))
+
 (deftest example-2
   (let [users {:alice {:active true,
                        :email "ALICE@EXAMPLE.COM",
