@@ -9,7 +9,7 @@ Rewrite nested Clojure data with a declared shape.
 ```clojure
 (over selector body)         ; => rewritten value
 (over-> value selector body) ; => rewritten value (thread-first helper)
-(over->> value selector body); => rewritten value (thread-last helper)
+(over->> selector body value); => rewritten value (thread-last helper)
 ```
 
 ## Examples
