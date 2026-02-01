@@ -182,7 +182,7 @@ Plain Clojure is already a win when:
 
 ## Notes
 
-- Identity: if no effective change occurs (value equality at all rewritten
+- Identity: if no effective change occurs (value and metadata equality at all rewritten
   points), `over` returns a result that is `identical?` to the input.
 - See [CLOS.md](CLOS.md) for the CLOS-style generic function system in this repo.
 
