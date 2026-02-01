@@ -48,13 +48,42 @@
   (let [form (macroexpand
                '(compile-over [{:keys [^String name]} ::input] {name name}))]
     (is (some #{'String String java.lang.String} (form-tags form "name"))))
+  (let [form (macroexpand
+               '(compile-over [{:keys [^long n], :or {n 1}} ::input] {n n}))]
+    (is (contains? (form-tags form "n") 'long)))
   (let [form (macroexpand '(compile-over [{^long id :id} ::input] {id id}))]
     (is (contains? (form-tags form "id") 'long)))
   (let [form (macroexpand
+               '(compile-over [{^String title "title"} ::input] {title title}))]
+    (is (some #{'String String java.lang.String} (form-tags form "title"))))
+  (let [form (macroexpand
                '(compile-over [{:strs [^String title]} ::input] {title title}))]
     (is (some #{'String String java.lang.String} (form-tags form "title"))))
+  (let [form (macroexpand '(compile-over
+                            [{:as ^String m, :keys [^long x]} ::input]
+                            {m m, x x}))]
+    (is (contains? (form-tags form "x") 'long))
+    (is (some #{'String String java.lang.String} (form-tags form "m"))))
   (let [form (macroexpand '(compile-over [{^String k v} ::input] {k k, v v}))]
-    (is (some #{'String String java.lang.String} (form-tags form "k")))))
+    (is (some #{'String String java.lang.String} (form-tags form "k"))))
+  (let [form (macroexpand '(compile-over [{k ^long v} ::input] {k k, v v}))]
+    (is (contains? (form-tags form "v") 'long)))
+  (let [form (macroexpand
+               '(compile-over [{^String k ^long v} ::input] {k k, v v}))]
+    (is (some #{'String String java.lang.String} (form-tags form "k")))
+    (is (contains? (form-tags form "v") 'long)))
+  (let [form (macroexpand '(compile-over [{_ ^long v} ::input] {v v}))]
+    (is (contains? (form-tags form "v") 'long))
+    (is (empty? (form-tags form "_"))))
+  (let [form
+          (macroexpand
+            '(compile-over [^String s ::input {:keys [^long n]} s] {n n, s s}))]
+    (is (some #{'String String java.lang.String} (form-tags form "s")))
+    (is (contains? (form-tags form "n") 'long)))
+  (let [form (macroexpand
+               '(compile-over [{:keys [^long x]} ::input] {x? (pos? x)}))]
+    (is (contains? (form-tags form "x") 'long))
+    (is (empty? (form-tags form "x?")))))
 
 (deftest example-2
   (let [users {:alice {:active true,
