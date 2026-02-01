@@ -13,8 +13,6 @@ Rewrite nested Clojure data with a declared shape.
 (over-plan selector body)    ; => compiler plan data
 ```
 
-See [CLOS.md](CLOS.md) for the CLOS-style generic function system included in this repo.
-
 ## Examples
 
 ### 1) Update nested numbers without a full walk
@@ -176,6 +174,7 @@ Plain Clojure is already a win when:
 ## Notes
 
 - `over-plan` returns the compiler plan as data. Useful for debugging.
+- See [CLOS.md](CLOS.md) for the CLOS-style generic function system in this repo.
 
 ## Running tests
 
