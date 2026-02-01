@@ -126,6 +126,8 @@ A selector is a vector of alternating `pattern` and `source`:
 - **Map-entry traversal:** `{kpat vpat}`
   - Requires a map value; iterates entries.
   - `kpat` binds the key (no traversal). `vpat` may traverse.
+  - Key traversal is intentionally not supported to keep map semantics and
+    identity guarantees predictable.
 - **Sequential traversal:** `[pat]`
   - Requires a sequential or set value; iterates elements.
 - **Plain symbol:** `sym`
