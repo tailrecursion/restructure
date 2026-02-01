@@ -8,7 +8,8 @@ Rewrite nested Clojure data with a declared shape.
 
 ```clojure
 (over selector body)         ; => rewritten value
-(over topic selector body)   ; => rewritten value (selector omits first source)
+(compile-over selector body) ; => fn of one argument
+(over-plan selector body)    ; => compiler plan data
 ```
 
 ## Examples
@@ -27,12 +28,11 @@ Rewrite nested Clojure data with a declared shape.
 ;; => {:left [{:p 1 :q 3} {:r 3} {:s 5}]
 ;;     :right [{:t 5}]}
 ```
-Thread-first (topic first, selector omits first source):
+Sequential example:
 ```clojure
-(-> data
-    (over [{_ [{_ n}]}]
-          {n (cond-> n (even? n) inc)})
-    (assoc :touched true))
+(over [[n] [1 2 3]]
+  {n? (even? n)})
+;; => [2]
 ```
 Map + vector traversal with one binding.
 

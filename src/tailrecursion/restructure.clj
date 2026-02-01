@@ -31,9 +31,12 @@
   (when-not (or (sequential? v) (set? v) (seq? v)) (type-error path :seqable v))
   v)
 
+(defn ^:no-doc equiv-with-meta? [a b] (and (= a b) (= (meta a) (meta b))))
+
 (defn- unchanged-coll?
   [coll out]
-  (and (= (count coll) (count out)) (every? true? (map = coll out))))
+  (and (= (count coll) (count out))
+       (every? true? (map equiv-with-meta? coll out))))
 
 (clos/defgeneric traverse-seq*)
 
@@ -584,21 +587,23 @@
                (empty? children)
                (not used?))
             (body-fn value-expr)
-          :else `(let [~v# ~value-expr
-                       ~v# ~(if (seq children)
-                              (emit-apply-children env v# children)
-                              v#)]
-                   (if (elide? ~v#)
-                     elide
-                     (let [~sym ~v#]
-                       (let [keep?# ~(if guard-present? guard-expr true)]
-                         (if keep?#
-                           (let [rewrite#
-                                   ~(if rewrite-present? rewrite-expr sym)
-                                 ~sym (if (= rewrite# ~sym) ~sym rewrite#)
-                                 ~out# ~sym]
-                             ~(body-fn out#))
-                           elide))))))))
+          :else
+            `(let [~v# ~value-expr
+                   ~v# ~(if (seq children)
+                          (emit-apply-children env v# children)
+                          v#)]
+               (if (elide? ~v#)
+                 elide
+                 (let [~sym ~v#]
+                   (let [keep?# ~(if guard-present? guard-expr true)]
+                     (if keep?#
+                       (let [rewrite# ~(if rewrite-present? rewrite-expr sym)
+                             ~sym (if (equiv-with-meta? rewrite# ~sym)
+                                    ~sym
+                                    rewrite#)
+                             ~out# ~sym]
+                         ~(body-fn out#))
+                       elide))))))))
 
 (defn- destructure-prep
   [ctx]
@@ -659,22 +664,25 @@
 (defn- destructure-guards
   [ctx]
   (let [{:keys [env all-syms key-drop-syms]} ctx
-        key-bindings
-          (vec (mapcat (fn [s]
-                         (let [guard-present? (contains? (:guards env) s)
-                               guard-expr (get-in env [:guards s])
-                               rewrite-present? (contains? (:rewrites env) s)
-                               rewrite-expr (get-in env [:rewrites s])
-                               drop-sym (get key-drop-syms s)
-                               rewrite-sym (gensym (str (name s) "_rewrite"))]
-                           [drop-sym
-                            `(or (elide? ~s)
-                                 (not ~(if guard-present? guard-expr true)))
-                            rewrite-sym (if rewrite-present? rewrite-expr s) s
-                            `(if ~drop-sym
-                               ~s
-                               (if (= ~rewrite-sym ~s) ~s ~rewrite-sym))]))
-                 all-syms))]
+        key-bindings (vec
+                       (mapcat
+                         (fn [s]
+                           (let [guard-present? (contains? (:guards env) s)
+                                 guard-expr (get-in env [:guards s])
+                                 rewrite-present? (contains? (:rewrites env) s)
+                                 rewrite-expr (get-in env [:rewrites s])
+                                 drop-sym (get key-drop-syms s)
+                                 rewrite-sym (gensym (str (name s) "_rewrite"))]
+                             [drop-sym
+                              `(or (elide? ~s)
+                                   (not ~(if guard-present? guard-expr true)))
+                              rewrite-sym (if rewrite-present? rewrite-expr s) s
+                              `(if ~drop-sym
+                                 ~s
+                                 (if (equiv-with-meta? ~rewrite-sym ~s)
+                                   ~s
+                                   ~rewrite-sym))]))
+                         all-syms))]
     (assoc ctx :key-bindings key-bindings)))
 
 (defn- destructure-map
@@ -702,7 +710,7 @@
                                [m1# v#]
                                all-syms)
                              m1#
-                             `(if (= ~m1# ~v#) ~v# ~m1#)))]
+                             `(if (equiv-with-meta? ~m1# ~v#) ~v# ~m1#)))]
     (assoc ctx
       :map-bindings map-bindings
       :m1# m1#)))
@@ -968,33 +976,12 @@
   [sel body]
   (compile-over-form sel body))
 
-(defn- selector-with-topic
-  [topic sel]
-  (when-not (vector? sel)
-    (error :parse
-           "Selector must be a vector"
-           {:selector sel, :expected :vector}))
-  (when-not (odd? (count sel))
-    (error :parse
-           "Selector must omit first source when topic is provided"
-           {:selector sel, :expected :pattern-then-pairs}))
-  (let [p1 (first sel) rest (next sel)] (vec (concat [p1 topic] rest))))
-
 (defmacro over
-  "Apply a compiled selector+body to the selector's source expression.
-
-   Arity:
-   - (over selector body)
-   - (over topic selector-without-first-source body)"
-  ([sel body]
-   (let [sel-ast (parse-selector sel)
-         source (:source (first (:steps sel-ast)))]
-     `((compile-over ~sel ~body) ~source)))
-  ([topic sel body]
-   (let [sel' (selector-with-topic topic sel)
-         sel-ast (parse-selector sel')
-         source (:source (first (:steps sel-ast)))]
-     `((compile-over ~sel' ~body) ~source))))
+  "Apply a compiled selector+body to the selector's source expression."
+  [sel body]
+  (let [sel-ast (parse-selector sel)
+        source (:source (first (:steps sel-ast)))]
+    `((compile-over ~sel ~body) ~source)))
 
 (defn over-plan
   "Return the compiler plan for selector+body as data."
