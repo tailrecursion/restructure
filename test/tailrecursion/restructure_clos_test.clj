@@ -8,14 +8,22 @@
 
 (clos/defmethod dispatch [(x Object)] :object)
 (clos/defmethod dispatch [(x String)] :string)
-(clos/defmethod dispatch [(x (eql :k))] :eql)
+(clos/defmethod dispatch [(x :k)] :value)
 (clos/defmethod dispatch [(x (pred even?))] :even)
 
 (deftest basic-dispatch
   (is (= :string (dispatch "a")))
   (is (= :object (dispatch :x)))
-  (is (= :eql (dispatch :k)))
+  (is (= :value (dispatch :k)))
   (is (= :even (dispatch 2))))
+
+(clos/defgeneric eql-dispatch)
+(clos/defmethod eql-dispatch [(x (eql :k))] :eql)
+(clos/defmethod eql-dispatch [x] :other)
+
+(deftest eql-alias
+  (is (= :eql (eql-dispatch :k)))
+  (is (= :other (eql-dispatch :x))))
 
 (clos/defgeneric next-method)
 
@@ -97,15 +105,39 @@
 
 (clos/defgeneric specializer-demo)
 
+(clos/defmethod specializer-demo [(m {:a 1, :b 2})] :map=)
 (clos/defmethod specializer-demo [(m (key= :a 1))] :key=)
 (clos/defmethod specializer-demo [(m (keys= :a :b))] :keys=)
 (clos/defmethod specializer-demo [(m (map-of keyword? int?))] :map-of)
-(clos/defmethod specializer-demo [(v (in #{:x :y}))] :in)
+(clos/defmethod specializer-demo [(v #{:x :y})] :in)
 (clos/defmethod specializer-demo [v] :default)
 
 (deftest new-specializers
-  (is (= :key= (specializer-demo {:a 1, :b 2})))
+  (is (= :map= (specializer-demo {:a 1, :b 2})))
+  (is (= :key= (specializer-demo {:a 1, :b 3})))
   (is (= :keys= (specializer-demo {:a 2, :b 3})))
   (is (= :map-of (specializer-demo {:k 1, :z 2})))
   (is (= :in (specializer-demo :x)))
   (is (= :default (specializer-demo :z))))
+
+(clos/defgeneric in-seq)
+(clos/defmethod in-seq [(x (in [:a :b]))] :hit)
+(clos/defmethod in-seq [x] :miss)
+
+(deftest in-sequential (is (= :hit (in-seq :a))) (is (= :miss (in-seq :c))))
+
+(clos/defgeneric isa-dispatch)
+(derive ::warning ::problem)
+(clos/defmethod isa-dispatch [(x (isa? ::problem))] :problem)
+(clos/defmethod isa-dispatch [x] :other)
+
+(deftest isa-specializer
+  (is (= :problem (isa-dispatch ::warning)))
+  (is (= :other (isa-dispatch ::ok))))
+
+(clos/defgeneric pred-exn {:pred-exceptions :error})
+(clos/defmethod pred-exn [(x (pred (fn [_] (throw (ex-info "boom" {})))))] :bad)
+(clos/defmethod pred-exn [x] :ok)
+
+(deftest pred-exceptions
+  (is (thrown? clojure.lang.ExceptionInfo (pred-exn :x))))

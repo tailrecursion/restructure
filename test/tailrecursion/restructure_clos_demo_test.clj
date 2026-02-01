@@ -22,9 +22,9 @@
 
 (clos/defgeneric classify {:combination :standard})
 
-(clos/defmethod classify [(x (eql :ok))] :ok)
-(clos/defmethod classify [(x (in #{:warn :error}))] :bad)
-(clos/defmethod classify [(m (key= :status :ok))] :status-ok)
+(clos/defmethod classify [(x :ok)] :ok)
+(clos/defmethod classify [(x #{:warn :error})] :bad)
+(clos/defmethod classify [(m {:status :ok})] :status-ok)
 (clos/defmethod classify [(m (has-keys :status :code))] :status)
 (clos/defmethod classify [(m (keys= :a :b))] :ab)
 (clos/defmethod classify [(m (map-of keyword? int?))] :kw-int)

@@ -35,25 +35,40 @@
 
 (defn- specializer-kind [spec] (:kind spec))
 
-(defn- safe-apply [f x] (try (f x) (catch Throwable _ false)))
+(defn- safe-apply
+  [f x pred-exceptions]
+  (try (f x)
+       (catch Throwable t (if (= pred-exceptions :error) (throw t) false))))
+
+(defn- in-contains?
+  [s x]
+  (cond (set? s) (contains? s x)
+        (map? s) (contains? s x)
+        (sequential? s) (boolean (some #{x} s))
+        (coll? s) (boolean (some #{x} s))
+        :else false))
 
 (defn- applicable?
-  [spec arg]
+  [spec arg pred-exceptions]
   (case (specializer-kind spec)
     :any true
     :eql (= (:value spec) arg)
-    :in (contains? (:set spec) arg)
+    :value (= (:value spec) arg)
+    :in (in-contains? (:set spec) arg)
     :key= (and (map? arg) (= (:value spec) (get arg (:key spec))))
+    :map= (and (map? arg) (every? (fn [[k v]] (= (get arg k) v)) (:map spec)))
     :keys (and (map? arg) (every? #(contains? arg %) (:keys spec)))
     :keys= (and (map? arg) (= (:keys spec) (set (keys arg))))
     :map-of (and (map? arg)
                  (every? (fn [[k v]]
-                           (and (safe-apply (:kpred spec) k)
-                                (safe-apply (:vpred spec) v)))
+                           (and (safe-apply (:kpred spec) k pred-exceptions)
+                                (safe-apply (:vpred spec) v pred-exceptions)))
                          arg))
     :class (instance? (specializer-class spec) arg)
-    :pred (safe-apply (:pred spec) arg)
-    :satisfies (safe-apply (partial satisfies? (:protocol spec)) arg)
+    :pred (safe-apply (:pred spec) arg pred-exceptions)
+    :satisfies
+      (safe-apply (partial satisfies? (:protocol spec)) arg pred-exceptions)
+    :isa (isa? arg (:value spec))
     false))
 
 (defn- class-distance
@@ -77,16 +92,19 @@
   [spec arg]
   (case (specializer-kind spec)
     :eql [0 0]
+    :value [0 0]
     :in [1 0]
-    :key= [2 0]
-    :keys [3 0]
-    :keys= [4 0]
-    :map-of [5 0]
-    :pred [6 0]
-    :satisfies [6 0]
-    :class [7 (class-distance (class arg) (specializer-class spec))]
-    :any [8 0]
-    [9 0]))
+    :map= [2 0]
+    :key= [3 0]
+    :keys [4 0]
+    :keys= [5 0]
+    :map-of [6 0]
+    :isa [7 0]
+    :pred [8 0]
+    :satisfies [8 0]
+    :class [9 (class-distance (class arg) (specializer-class spec))]
+    :any [10 0]
+    [11 0]))
 
 (defn- method-score
   [method args]
@@ -124,9 +142,9 @@
     true))
 
 (defn- combine-standard
-  [methods args]
-  (let [applicable (filter #(every? true?
-                                    (map applicable? (:specializers %) args))
+  [methods args pred-exceptions]
+  (let [applies? (fn [spec arg] (applicable? spec arg pred-exceptions))
+        applicable (filter #(every? true? (map applies? (:specializers %) args))
                      methods)
         grouped (group-by :qualifier applicable)
         arounds (sort-methods (get grouped :around []) args)
@@ -147,14 +165,14 @@
       (apply base args))))
 
 (defn- combine-simple
-  [methods args op]
-  (let [primaries (sort-methods (filter #(and (= :primary (:qualifier %))
-                                              (every? true?
-                                                      (map applicable?
-                                                        (:specializers %)
-                                                        args)))
-                                  methods)
-                                args)
+  [methods args pred-exceptions op]
+  (let [applies? (fn [spec arg] (applicable? spec arg pred-exceptions))
+        primaries
+          (sort-methods
+            (filter #(and (= :primary (:qualifier %))
+                          (every? true? (map applies? (:specializers %) args)))
+              methods)
+            args)
         values (map #(apply (:fn %) args) primaries)]
     (case op
       :list (vec values)
@@ -166,29 +184,29 @@
       (when-let [f op] (reduce f values)))))
 
 (defn- combine-default
-  [methods args]
-  (let [primaries (sort-methods (filter #(and (= :primary (:qualifier %))
-                                              (every? true?
-                                                      (map applicable?
-                                                        (:specializers %)
-                                                        args)))
-                                  methods)
-                                args)]
+  [methods args pred-exceptions]
+  (let [applies? (fn [spec arg] (applicable? spec arg pred-exceptions))
+        primaries
+          (sort-methods
+            (filter #(and (= :primary (:qualifier %))
+                          (every? true? (map applies? (:specializers %) args)))
+              methods)
+            args)]
     (when-let [method (first primaries)] (apply (:fn method) args))))
 
 (defn- invoke-generic
   [generic args]
-  (let [{:keys [methods combination arity]} @generic
+  (let [{:keys [methods combination arity pred-exceptions]} @generic
         _ (ensure-arity arity args)]
     (case combination
-      :standard (combine-standard methods args)
-      :list (combine-simple methods args :list)
-      :and (combine-simple methods args :and)
-      :or (combine-simple methods args :or)
-      :+ (combine-simple methods args :+)
-      :max (combine-simple methods args :max)
-      :min (combine-simple methods args :min)
-      (combine-default methods args))))
+      :standard (combine-standard methods args pred-exceptions)
+      :list (combine-simple methods args pred-exceptions :list)
+      :and (combine-simple methods args pred-exceptions :and)
+      :or (combine-simple methods args pred-exceptions :or)
+      :+ (combine-simple methods args pred-exceptions :+)
+      :max (combine-simple methods args pred-exceptions :max)
+      :min (combine-simple methods args pred-exceptions :min)
+      (combine-default methods args pred-exceptions))))
 
 (defn ^:no-doc make-generic
   [name opts]
@@ -196,7 +214,8 @@
                        :methods [],
                        :next-index 0,
                        :arity nil,
-                       :combination (or (:combination opts) :standard)})]
+                       :combination (or (:combination opts) :standard),
+                       :pred-exceptions (or (:pred-exceptions opts) :false)})]
     (with-meta (fn [& args] (invoke-generic generic args))
       {:restructure/generic true, :generic generic, :name name})))
 
@@ -257,10 +276,10 @@
   [name & body]
   (let [emit-specializer
           (fn [spec]
-            (cond (nil? spec) (throw (ex-info "Nil is not a valid specializer"
-                                              {:specializer spec}))
-                  (= spec :any) {:kind :any}
+            (cond (= spec :any) {:kind :any}
+                  (= spec :default) {:kind :any}
                   (= spec 't) {:kind :any}
+                  (= spec '_) {:kind :any}
                   (and (seq? spec) (= 'key= (first spec)))
                     (let [[_ k v] spec] `{:kind :key=, :key ~k, :value ~v})
                   (and (seq? spec) (= 'op (first spec)))
@@ -271,6 +290,10 @@
                     (let [ks (rest spec)] `{:kind :keys, :keys ~(vec ks)})
                   (and (seq? spec) (= 'in (first spec)))
                     (let [s (second spec)] `{:kind :in, :set ~s})
+                  (set? spec) `{:kind :in, :set ~spec}
+                  (map? spec) `{:kind :map=, :map ~spec}
+                  (and (seq? spec) (= 'isa? (first spec)))
+                    (let [v (second spec)] `{:kind :isa, :value ~v})
                   (and (seq? spec) (= 'map-of (first spec)))
                     (let [[_ kp vp] spec]
                       (cond (and (symbol? kp) (symbol? vp))
@@ -286,6 +309,13 @@
                             :else `{:kind :map-of, :kpred ~kp, :vpred ~vp}))
                   (and (seq? spec) (= 'eql (first spec)))
                     `{:kind :eql, :value ~(second spec)}
+                  (or (keyword? spec)
+                      (string? spec)
+                      (number? spec)
+                      (char? spec)
+                      (boolean? spec)
+                      (nil? spec))
+                    `{:kind :value, :value ~spec}
                   (and (seq? spec) (= 'pred (first spec)))
                     (let [p (second spec)]
                       (cond (symbol? p) `{:kind :pred, :pred (deref (var ~p))}

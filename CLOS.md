@@ -77,6 +77,11 @@ supports:
 `defgeneric` stores metadata on the var (`:restructure/generic`) and returns the
 var.
 
+Options:
+- `:combination` — method combination, default `:standard`.
+- `:pred-exceptions` — behavior when predicate specializers throw. Defaults to
+  `:false` (treat as non-match). Use `:error` to rethrow.
+
 ## Defining methods
 
 ```
@@ -94,8 +99,11 @@ Examples of parameter forms:
 ```
 [x]                     ; :any specializer
 [x String]              ; class specializer
-[x (eql :k)]            ; eql specializer
+[x :k]                  ; literal value specializer
 [m (key= :op :bind)]    ; map key/value specializer
+[m {:op :bind}]         ; map literal specializer
+[x #{:warn :error}]     ; set literal specializer
+[x (isa? ::thing)]      ; hierarchy-based specializer
 ```
 
 ## Specializers
@@ -107,9 +115,14 @@ time. `t` and `:any` are accepted as the universal specializer.
 | Form | Applicability | Notes |
 | --- | --- | --- |
 | `:any`, `t` | always | universal specializer |
+| `:default`, `_` | always | aliases for `:any` |
 | `Class` | `instance?` | class is resolved at macroexpansion |
-| `(eql v)` | `(= v arg)` | exact value match |
-| `(in s)` | `(contains? s arg)` | membership in a set or map |
+| literal (`:k`, `"s"`, `42`, `nil`) | `(= v arg)` | exact value match |
+| `(eql v)` | `(= v arg)` | legacy alias |
+| set literal (`#{...}`) | membership | same as `(in s)` |
+| `(in s)` | membership | set/map uses `contains?`; seqs use `some` |
+| map literal (`{:k v ...}`) | map match | all entries must match `get` |
+| `(isa? v)` | `(isa? arg v)` | uses Clojure hierarchy |
 | `(pred f)` | `(f arg)` | predicate errors are treated as false |
 | `(satisfies P)` | `(satisfies? P arg)` | protocol check; errors treated as false |
 | `(key= k v)` | map with `get` equal | map-only dispatch |
@@ -123,7 +136,8 @@ resolved to vars at macroexpansion time via `(deref (var sym))`. If a function
 value is supplied, it is used directly.
 
 Predicate specializers (`pred`, `satisfies`, `map-of`) use a safe call wrapper.
-Any thrown exception is treated as a non-match.
+Any thrown exception is treated as a non-match unless `:pred-exceptions` is set
+to `:error`.
 
 ## Method selection and specificity
 
@@ -133,15 +147,17 @@ order (earlier definitions win ties).
 
 Specificity order (most specific to least):
 
-1. `eql`
+1. literal / `eql`
 2. `in`
-3. `key=`
-4. `has-keys`
-5. `keys=`
-6. `map-of`
-7. `pred` / `satisfies`
-8. class specializer (closest superclass/interface wins)
-9. `any`
+3. map literal
+4. `key=`
+5. `has-keys`
+6. `keys=`
+7. `map-of`
+8. `isa?`
+9. `pred` / `satisfies`
+10. class specializer (closest superclass/interface wins)
+11. `any`
 
 For class specializers, the distance is computed by breadth-first search over
 the superclass/interface graph.
