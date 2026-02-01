@@ -181,19 +181,6 @@ Plain Clojure is already a win when:
   points), `over` returns a result that is `identical?` to the input.
 - See [CLOS.md](CLOS.md) for the CLOS-style generic function system in this repo.
 
-## Running tests
-
-```bash
-clojure -M:test
-```
-
-## Lint and format
-
-```bash
-clj -M:lint --lint src test
-clj -M:fmt
-```
-
 ## Check (format + test + lint)
 
 ```bash
