@@ -1,13 +1,24 @@
 (ns tailrecursion.restructure-test
   (:require [clojure.test :refer [deftest is]]
             [tailrecursion.restructure :refer [over compile-over over-plan]]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [clojure.walk :as walk]))
 
 (defmacro thrown? [cls & body] `(try ~@body false (catch ~cls _# true)))
 
 (defmacro thrown-with-msg?
   [cls re & body]
   `(try ~@body false (catch ~cls e# (boolean (re-find ~re (.getMessage e#))))))
+
+(defn- form-tags
+  [form sym-name]
+  (let [tags (atom #{})]
+    (walk/postwalk (fn [x]
+                     (when (and (symbol? x) (= (name x) sym-name))
+                       (swap! tags conj (:tag (meta x))))
+                     x)
+                   form)
+    (disj @tags nil)))
 
 (deftest readme-example-1
   (let [data {:a [{:aa 1, :bb 2} {:cc 3}], :b [{:dd 4}]}
@@ -30,6 +41,20 @@
         out (over [{:keys [lines]} order [{:keys [sku qty], :as line}] lines]
                   {line? (seq sku), qty (or qty 0)})]
     (is (= {:id 42, :lines [{:sku "A", :qty 2} {:sku "B", :qty 0}]} out))))
+
+(deftest selector-type-hints
+  (let [form (macroexpand '(compile-over [^long n ::input] {n (inc n)}))]
+    (is (contains? (form-tags form "n") 'long)))
+  (let [form (macroexpand
+               '(compile-over [{:keys [^String name]} ::input] {name name}))]
+    (is (some #{'String String java.lang.String} (form-tags form "name"))))
+  (let [form (macroexpand '(compile-over [{^long id :id} ::input] {id id}))]
+    (is (contains? (form-tags form "id") 'long)))
+  (let [form (macroexpand
+               '(compile-over [{:strs [^String title]} ::input] {title title}))]
+    (is (some #{'String String java.lang.String} (form-tags form "title"))))
+  (let [form (macroexpand '(compile-over [{^String k v} ::input] {k k, v v}))]
+    (is (some #{'String String java.lang.String} (form-tags form "k")))))
 
 (deftest example-2
   (let [users {:alice {:active true,

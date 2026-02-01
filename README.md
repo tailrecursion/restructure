@@ -19,15 +19,16 @@ See [CLOS.md](CLOS.md) for the CLOS-style generic function system included in th
 ### 1) Update nested numbers without a full walk
 ```clojure
 (def data
-  {:a [{:aa 1 :bb 2}
-       {:cc 3}]
-   :b [{:dd 4}]})
+  {:left [{:p 1 :q 2}
+          {:r 3}
+          {:s 4}]
+   :right [{:t 5}]})
 
 (over [{_ [{_ n}]} data]
   {n (cond-> n (even? n) inc)})
 
-;; => {:a [{:aa 1 :bb 3} {:cc 3}]
-;;     :b [{:dd 5}]}
+;; => {:left [{:p 1 :q 3} {:r 3} {:s 5}]
+;;     :right [{:t 5}]}
 ```
 Map + vector traversal with one binding.
 
