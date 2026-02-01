@@ -39,6 +39,17 @@
                  (into []))]
     (is (= [3 5] out))))
 
+(deftest seq-destructure
+  (let [data [[:x 1] [:y 2]]
+        out (over [(seq [k v]) data] {v (inc v)})]
+    (is (= [[:x 2] [:y 3]] out)))
+  (let [data [[1 2 3] [4 5 6]]
+        out (over [(seq [a b & more]) data] {b (inc b)})]
+    (is (= [[1 3 3] [4 6 6]] out)))
+  (let [data [[1 2] [3 5]]
+        out (over [(seq [a b]) data] {b? (odd? b), b b})]
+    (is (= [[3 5]] out))))
+
 (deftest readme-example-2
   (let [users {:alice {:active true, :email "ALICE@EXAMPLE.COM"},
                :bob {:active false, :email "bob@example.com"},

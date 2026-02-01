@@ -22,9 +22,23 @@
        (or (some #(contains? m %) destructure-special-keys)
            (some destructure-entry? m))))
 
+(defn- seq-destructure-syms
+  [v]
+  (loop [forms v
+         out []]
+    (if (empty? forms)
+      out
+      (let [x (first forms)]
+        (cond (= x '&) (recur (nnext forms) (conj out (second forms)))
+              (= x :as) (recur (nnext forms) (conj out (second forms)))
+              (symbol? x) (recur (next forms) (conj out x))
+              :else (recur (next forms) out))))))
+
 (defn- pattern-bindings
   [pat]
   (cond (symbol? pat) (if (= '_ pat) [] [pat])
+        (and (seq? pat) (= 'seq (first pat)) (vector? (second pat)))
+          (seq-destructure-syms (second pat))
         (vector? pat) (if (= 1 (count pat)) (pattern-bindings (first pat)) [])
         (map? pat)
           (if (destructure-map? pat)

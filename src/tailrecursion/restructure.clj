@@ -123,6 +123,10 @@
   [pat path form]
   {:op :seq-elems, :pat pat, :path path, :form form})
 
+(defn- make-seq-destructure
+  [v path form]
+  {:op :seq-destructure, :dform v, :path path, :form form})
+
 (defn- make-map-entries
   [kpat vpat path form]
   {:op :map-entries, :kpat kpat, :vpat vpat, :path path, :form form})
@@ -219,6 +223,7 @@
                                (p/satisfy #(symbol? (:form %)))))
 
 (declare vector-pattern-parser
+         seq-destructure-parser
          destructure-pattern-parser
          map-entry-pattern-parser
          pattern-parser)
@@ -245,6 +250,47 @@
                       form))
     (p/satisfy #(vector? (:form %)))))
 
+(defn- seq-destructure-info
+  [v path]
+  (let [err (fn [msg form] (error :parse msg {:path path, :pattern form}))]
+    (loop [forms v
+           out []
+           prefix []
+           rest-sym nil
+           as-sym nil]
+      (if (empty? forms)
+        {:syms out, :prefix prefix, :rest rest-sym, :as as-sym}
+        (let [x (first forms)]
+          (cond
+            (= x '&) (let [r (second forms)]
+                       (when-not (symbol? r) (err "Expected symbol after &" v))
+                       (recur (nnext forms) (conj out r) prefix r as-sym))
+            (= x :as) (let [a (second forms)]
+                        (when-not (symbol? a)
+                          (err "Expected symbol after :as" v))
+                        (recur (nnext forms) (conj out a) prefix rest-sym a))
+            (symbol? x)
+              (recur (next forms) (conj out x) (conj prefix x) rest-sym as-sym)
+            :else (err
+                    "Only symbols, &, and :as are supported in seq destructure"
+                    v)))))))
+
+(p/define-parser
+  seq-destructure-parser
+  (p/map-result
+    (fn [{:keys [form path]}]
+      (when-not (= 2 (count form))
+        (error :parse
+               "Seq destructure requires (seq [..])"
+               {:path path, :pattern form, :expected :seq-destructure}))
+      (let [v (second form)]
+        (when-not (vector? v)
+          (error :parse
+                 "Seq destructure requires a vector"
+                 {:path path, :pattern form, :expected :vector}))
+        (make-seq-elems (make-seq-destructure v (conj path 1) form) path form)))
+    (p/satisfy #(and (seq? (:form %)) (= 'seq (first (:form %)))))))
+
 (p/define-parser
   destructure-pattern-parser
   (p/map-result
@@ -270,7 +316,7 @@
       (let [[k v] (first form)
             kpat (parse-pattern-form k (conj path :key))
             vpat (parse-pattern-form v (conj path :val))]
-        (when (#{:seq-elems :map-entries} (:op kpat))
+        (when (#{:seq-elems :map-entries :seq-destructure} (:op kpat))
           (error :parse
                  "Key pattern may not be a traversal"
                  {:path path, :pattern form, :cause :key-traversal}))
@@ -280,6 +326,7 @@
 (p/define-parser pattern-parser
                  (p/alternative 'symbol-pattern-parser
                                 'vector-pattern-parser
+                                'seq-destructure-parser
                                 'destructure-pattern-parser
                                 'map-entry-pattern-parser))
 
@@ -462,6 +509,12 @@
       (error :validate "Missing :vpat in map-entry node" ctx))
     pat))
 
+(clos/defmethod validate-node [(pat (key= :op :seq-destructure))]
+  (let [ctx (node-ctx pat)]
+    (when-not (:dform pat)
+      (error :validate "Missing :dform in seq destructure node" ctx))
+    pat))
+
 (clos/defmethod validate-node [(pat (key= :op :destructure))]
   (node-ctx pat)
   pat)
@@ -471,7 +524,8 @@
 (defn- validate-node!
   [pat]
   (let [vals (validate-node pat)]
-    (when-not (#{:bind :seq-elems :map-entries :destructure} (:op pat))
+    (when-not (#{:bind :seq-elems :map-entries :destructure :seq-destructure}
+               (:op pat))
       (error :validate "Unknown pattern op" (node-ctx pat)))
     (or (first (remove nil? vals)) pat)))
 
@@ -507,6 +561,12 @@
 
 (clos/defmethod pat-bindings [(pat (key= :op :seq-elems))]
   (let [pat (validate-node! pat)] (pat-bindings (:pat pat))))
+
+(clos/defmethod pat-bindings [(pat (key= :op :seq-destructure))]
+  (let [pat (validate-node! pat)
+        dform (:dform pat)
+        syms (:syms (seq-destructure-info dform (:path pat)))]
+    (vec (for [s syms :when (not= '_ s)] (binding-info s :value (:path pat))))))
 
 (clos/defmethod pat-bindings [(pat (key= :op :map-entries))]
   (let [pat (validate-node! pat)]
@@ -781,6 +841,34 @@
         v# (gensym "v")]
     `(let [~v# (~f ~value-expr)] (if (elide? ~v#) elide ~(body-fn v#)))))
 
+(clos/defmethod emit-with-pattern [env (pat (key= :op :seq-destructure))
+                                   value-expr body-fn]
+  (let [dform (:dform pat)
+        {:keys [prefix rest as syms]} (seq-destructure-info dform (:path pat))
+        v# (gensym "v")
+        keep?# (gensym "keep")
+        out# (gensym "out")
+        body-expr (body-fn out#)
+        rewritten-bindings (vec (mapcat (fn [s] [s (get-in env [:rewrites s])])
+                                  (filter #(and (not= '_ %)
+                                                (contains? (:rewrites env) %))
+                                    syms)))
+        guards (for [s syms
+                     :when (and (not= '_ s) (contains? (:guards env) s))]
+                 (get-in env [:guards s]))
+        new# (gensym "new")
+        rebuild# (gensym "rebuild")]
+    `(let [~v# ~value-expr
+           ~dform ~v#
+           ~keep?# ~(if (seq guards) `(and ~@guards) true)]
+       (if (not ~keep?#)
+         elide
+         (let [~@rewritten-bindings ~rebuild#
+               (vec (concat [~@prefix] ~(or rest []))) ~new#
+               ~(if (and as (contains? (:rewrites env) as)) as rebuild#) ~out#
+               (if (equiv-with-meta? ~new# ~v#) ~v# ~new#)]
+           ~body-expr)))))
+
 (clos/defmethod emit-with-pattern [env (pat (key= :op :map-entries)) value-expr
                                    body-fn]
   (let [f (get-in env [:node-fns (:id pat)])
@@ -814,6 +902,7 @@
 
 (clos/defmethod assign-ids [(pat (key= :op :bind)) _id _nodes] pat)
 (clos/defmethod assign-ids [(pat (key= :op :destructure)) _id _nodes] pat)
+(clos/defmethod assign-ids [(pat (key= :op :seq-destructure)) _id _nodes] pat)
 (clos/defmethod assign-ids [pat _id _nodes] pat)
 
 (defn- collect-all-traversals

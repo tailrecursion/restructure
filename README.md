@@ -130,6 +130,9 @@ A selector is a vector of alternating `pattern` and `source`:
     identity guarantees predictable.
 - **Sequential traversal:** `[pat]`
   - Requires a sequential or set value; iterates elements.
+- **Sequential destructure traversal:** `(seq [k v & more])`
+  - Iterates elements and destructures each element as a vector, supporting `&`
+    and `:as`.
 - **Plain symbol:** `sym`
   - Binds the current value.
 - **Map destructuring form:** `{:keys [...], :strs [...], :as sym, :or {...}}`
