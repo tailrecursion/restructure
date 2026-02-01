@@ -118,7 +118,6 @@ time. `t` and `:any` are accepted as the universal specializer.
 | `:default`, `_` | always | aliases for `:any` |
 | `Class` | `instance?` | class is resolved at macroexpansion |
 | literal (`:k`, `"s"`, `42`, `nil`) | `(= v arg)` | exact value match |
-| `(eql v)` | `(= v arg)` | legacy alias |
 | set literal (`#{...}`) | membership | same as `(in s)` |
 | `(in s)` | membership | set/map uses `contains?`; seqs use `some` |
 | map literal (`{:k v ...}`) | map match | all entries must match `get` |
@@ -147,7 +146,7 @@ order (earlier definitions win ties).
 
 Specificity order (most specific to least):
 
-1. literal / `eql`
+1. literal
 2. `in`
 3. map literal
 4. `key=`

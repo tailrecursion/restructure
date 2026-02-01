@@ -52,7 +52,6 @@
   [spec arg pred-exceptions]
   (case (specializer-kind spec)
     :any true
-    :eql (= (:value spec) arg)
     :value (= (:value spec) arg)
     :in (in-contains? (:set spec) arg)
     :key= (and (map? arg) (= (:value spec) (get arg (:key spec))))
@@ -91,7 +90,6 @@
 (defn- specificity-score
   [spec arg]
   (case (specializer-kind spec)
-    :eql [0 0]
     :value [0 0]
     :in [1 0]
     :map= [2 0]
@@ -307,8 +305,6 @@
                                            :kpred ~kp,
                                            :vpred (deref (var ~vp))}
                             :else `{:kind :map-of, :kpred ~kp, :vpred ~vp}))
-                  (and (seq? spec) (= 'eql (first spec)))
-                    `{:kind :eql, :value ~(second spec)}
                   (or (keyword? spec)
                       (string? spec)
                       (number? spec)

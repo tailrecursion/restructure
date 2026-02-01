@@ -17,13 +17,6 @@
   (is (= :value (dispatch :k)))
   (is (= :even (dispatch 2))))
 
-(clos/defgeneric eql-dispatch)
-(clos/defmethod eql-dispatch [(x (eql :k))] :eql)
-(clos/defmethod eql-dispatch [x] :other)
-
-(deftest eql-alias
-  (is (= :eql (eql-dispatch :k)))
-  (is (= :other (eql-dispatch :x))))
 
 (clos/defgeneric next-method)
 
