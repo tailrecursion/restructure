@@ -8,7 +8,7 @@ Rewrite nested Clojure data with a declared shape.
 
 ```clojure
 (over selector body)         ; => rewritten value
-(over topic selector body)   ; => rewritten value
+(over topic selector body)   ; => rewritten value (selector omits first source)
 (compile-over selector body) ; => fn of one argument
 (over-plan selector body)    ; => compiler plan data
 ```
@@ -31,11 +31,12 @@ See [CLOS.md](CLOS.md) for the CLOS-style generic function system included in th
 ;; => {:left [{:p 1 :q 3} {:r 3} {:s 5}]
 ;;     :right [{:t 5}]}
 ```
-Thread-first:
+Thread-first (topic first, selector omits first source):
 ```clojure
 (-> data
     (over [{_ [{_ n}]}]
-          {n (cond-> n (even? n) inc)}))
+          {n (cond-> n (even? n) inc)})
+    (assoc :touched true))
 ```
 Map + vector traversal with one binding.
 
