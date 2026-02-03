@@ -206,7 +206,6 @@
      coll
      (do (ensure-seqable coll path loc form) (traverse-seq* coll f path)))))
 
-
 (defn ^:no-doc traverse-map
   "Traverse map entries, applying f to each entry.
    f returns elide to drop entry or a vector [k v]."
@@ -235,7 +234,6 @@
                      out
                      (with-meta out (meta m)))]
            (if (not changed?) m out))))))
-
 
 ;; Parsing / validation
 
@@ -585,7 +583,7 @@
   [bindings rewrites]
   (doseq [[sym info] bindings] (binding-conflicts info sym bindings rewrites)))
 
-;; Pass 5: usage analysis (conservative)
+;; Pass 5: usage analysis
 
 (defn ^:no-doc unqualified-symbol? [s] (and (symbol? s) (nil? (namespace s))))
 
