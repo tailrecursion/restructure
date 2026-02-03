@@ -78,32 +78,45 @@ Plain Clojure:
                 {}))
 ```
 
-### 3) Traverse a nested vector and drop bad items
+### 3) Vendor-specific SKU rewrite (multiple levels)
 ```clojure
-(def order
-  {:id 42
-   :lines [{:sku "A" :qty 2}
-           {:sku ""  :qty 1}
-           {:sku "B" :qty 0}]})
+(def db
+  {:orders [{:id 1
+             :lines [{:sku "A" :qty 2 :vendor "x"}
+                     {:sku "B" :qty 1 :vendor "y"}]}
+            {:id 2
+             :lines [{:sku "C" :qty 1 :vendor "y"}]}]
+   :users {"tim" {:cart [{:sku "B" :qty 3 :vendor "y"}]}}})
 
-(over [{:keys [lines]} order
-       [{:keys [sku qty] :as line}] lines]
-  {line? (seq sku)
-   qty   (or qty 0)})
+(over [{:keys [orders users]} db
+       [{:keys [lines]}] orders
+       [{line-sku :sku, vendor :vendor}] lines
+       {id {:keys [cart]}} users
+       [{cart-sku :sku cart-vendor :vendor}] cart]
+  {line-sku (if (= vendor "y") (str line-sku "-y") line-sku)
+   cart-sku (if (= cart-vendor "y") (str cart-sku "-y") cart-sku)})
 
-;; => {:id 42
-;;     :lines [{:sku "A" :qty 2}
-;;             {:sku "B" :qty 0}]}
+;; => {:orders [{:id 1, :lines [{:sku "A", :qty 2, :vendor "x"}
+;;                              {:sku "B-y", :qty 1, :vendor "y"}]}
+;;              {:id 2, :lines [{:sku "C-y", :qty 1, :vendor "y"}]}]
+;;     :users {"tim" {:cart [{:sku "B-y", :qty 3, :vendor "y"}]}}}
 ```
-Sequential traversal; each element can be rewritten or dropped.
 
 Plain Clojure:
 ```clojure
-(update order :lines
-        (fn [lines]
-          (->> lines
-               (filter (comp seq :sku))
-               (mapv #(update % :qty (fnil identity 0))))))
+(let [suffix-sku (fn [{:keys [sku vendor] :as line}]
+                   (if (= vendor "y")
+                     (assoc line :sku (str sku "-y"))
+                     line))]
+  (-> db
+      (update :orders
+              (fn [orders]
+                (mapv (fn [order]
+                        (update order :lines #(mapv suffix-sku %)))
+                      orders)))
+      (update :users
+              (fn [users]
+                (update-vals users #(update % :cart (fnil (partial mapv suffix-sku) [])))))))
 ```
 
 ## Selector semantics (query, not destructuring)
