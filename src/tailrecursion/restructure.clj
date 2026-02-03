@@ -1,6 +1,8 @@
 (ns tailrecursion.restructure
   "Rewrite nested Clojure data with a declared shape."
-  (:require [clojure.string :as str]
+  (:require [clojure.java.io :as io]
+            [clojure.pprint :as pprint]
+            [clojure.string :as str]
             [tailrecursion.restructure.parser :as p]
             [tailrecursion.restructure.clos :as clos]))
 
@@ -8,28 +10,136 @@
 
 (defn ^:no-doc elide? [x] (identical? x elide))
 
+(clos/defgeneric error-hints {:combination :list})
+(clos/defgeneric error-hints* {:combination :list})
+
+(clos/defmethod error-hints [_data] nil)
+
+(clos/defmethod error-hints [(data (pred map?))]
+  (error-hints* (:kind data) (:expected data) (:value data)))
+
+(clos/defmethod error-hints* [_kind _expected _actual] nil)
+
+(clos/defmethod error-hints*
+  [(kind :pattern-type-mismatch) (expected :map)
+   (actual (pred (fn [v] (or (sequential? v) (set? v) (seq? v)))))]
+  "Expected a map pattern; for collections use [..] to traverse elements or {k v} for entries.")
+
+(clos/defmethod error-hints* [(kind :pattern-type-mismatch) (expected :seqable)
+                              (actual (pred map?))]
+  "Expected a seq pattern; for maps use {k v} entry traversal or {:keys ...} map destructure.")
+
+(defn- form-loc
+  [form]
+  (let [m (meta form)
+        loc (select-keys m [:line :column :end-line :end-column :file])]
+    (when (or (:line loc) (:column loc))
+      (if (:file loc) loc (assoc loc :file *file*)))))
+
+(defn- loc->snippet
+  [loc]
+  (let [{:keys [file line column end-column]} loc]
+    (when (and file line column)
+      (try (let [f (io/file file)]
+             (when (.exists f)
+               (let [text (nth (str/split-lines (slurp f)) (dec line) nil)]
+                 (when text
+                   (let [col (max 1 column)
+                         end (max (inc col) (or end-column (inc col)))
+                         caret (str (apply str (repeat (dec col) \space))
+                                    (apply str
+                                      (repeat (max 1 (- end col)) \^)))]
+                     (str text "\n" caret))))))
+           (catch Exception _ nil)))))
+
+(defn- form->snippet
+  [form]
+  (when form
+    (let [s (pr-str form)
+          caret (apply str (repeat (count s) \^))]
+      (str s "\n" caret))))
+
+(defn- enrich-error-data
+  [data]
+  (let [loc (or (:loc data)
+                (form-loc (:form data))
+                (form-loc (:pattern data))
+                (form-loc (:selector data))
+                (form-loc (:source data)))
+        snippet (when loc (loc->snippet loc))]
+    (cond-> data
+      loc (assoc :loc loc)
+      snippet (assoc :snippet snippet))))
+
+(defn- format-error-message
+  [msg data]
+  (let [loc (or (:loc data)
+                (form-loc (:form data))
+                (form-loc (:pattern data))
+                (form-loc (:selector data))
+                (form-loc (:source data)))
+        snippet (or (when loc (loc->snippet loc))
+                    (:snippet data)
+                    (form->snippet (:form data)))
+        loc-line (when (and loc (:line loc) (:column loc))
+                   (pprint/cl-format nil
+                                     "~%  at ~:[~A:~A~;~A:~A:~A~]"
+                                     (some? (:file loc))
+                                     (:line loc)
+                                     (:column loc)
+                                     (:file loc)
+                                     (:line loc)
+                                     (:column loc)))
+        hints (->> (concat (when-let [h (:hint data)] [h]) (error-hints data))
+                   (mapcat
+                     (fn [h]
+                       (if (and (sequential? h) (not (string? h))) h [h])))
+                   (remove nil?)
+                   distinct)]
+    (pprint/cl-format nil
+                      "~A~A~{~%  hint: ~A~}~:[~;~%~%~A~]"
+                      msg
+                      (or loc-line "")
+                      hints
+                      (some? snippet)
+                      snippet)))
+
 (defn- error
-  ([msg data] (throw (ex-info msg data)))
-  ([phase msg data] (throw (ex-info msg (assoc data :phase phase)))))
+  ([msg data]
+   (let [data' (enrich-error-data data)]
+     (throw (ex-info (format-error-message msg data') data'))))
+  ([phase msg data]
+   (let [data' (enrich-error-data (assoc data :phase phase))]
+     (throw (ex-info (format-error-message msg data') data')))))
 
 (defn- type-error
-  [path expected actual]
-  (error :runtime
-         "Pattern type mismatch"
-         {:path path,
-          :expected expected,
-          :actual (if (nil? actual) nil (type actual)),
-          :value actual}))
+  ([path expected actual] (type-error path expected actual nil nil))
+  ([path expected actual loc] (type-error path expected actual loc nil))
+  ([path expected actual loc form]
+   (error :runtime
+          "Pattern type mismatch"
+          (cond-> {:path path,
+                   :expected expected,
+                   :actual (if (nil? actual) nil (type actual)),
+                   :value actual,
+                   :kind :pattern-type-mismatch}
+            loc (assoc :loc loc)
+            form (assoc :form form)))))
 
 (defn ^:no-doc ensure-map
-  [v path]
-  (when-not (map? v) (type-error path :map v))
-  v)
+  ([v path] (ensure-map v path nil nil))
+  ([v path loc] (ensure-map v path loc nil))
+  ([v path loc form]
+   (when-not (map? v) (type-error path :map v loc form))
+   v))
 
 (defn ^:no-doc ensure-seqable
-  [v path]
-  (when-not (or (sequential? v) (set? v) (seq? v)) (type-error path :seqable v))
-  v)
+  ([v path] (ensure-seqable v path nil nil))
+  ([v path loc] (ensure-seqable v path loc nil))
+  ([v path loc form]
+   (when-not (or (sequential? v) (set? v) (seq? v))
+     (type-error path :seqable v loc form))
+   v))
 
 (defn ^:no-doc equiv-with-meta? [a b] (and (= a b) (= (meta a) (meta b))))
 
@@ -89,38 +199,42 @@
 (defn ^:no-doc traverse-seq
   "Traverse a sequential or set, applying f to each element.
    f returns elide to remove an element."
-  [coll f path]
-  (if (nil? coll)
-    coll
-    (do (ensure-seqable coll path) (traverse-seq* coll f path))))
+  ([coll f path] (traverse-seq coll f path nil nil))
+  ([coll f path loc] (traverse-seq coll f path loc nil))
+  ([coll f path loc form]
+   (if (nil? coll)
+     coll
+     (do (ensure-seqable coll path loc form) (traverse-seq* coll f path)))))
 
 
 (defn ^:no-doc traverse-map
   "Traverse map entries, applying f to each entry.
    f returns elide to drop entry or a vector [k v]."
-  [m f path]
-  (if (nil? m)
-    m
-    (do (ensure-map m path)
-        (let [base (if (record? m) {} (empty m))
-              [out changed?] (reduce-kv
-                               (fn [[acc changed?] k v]
-                                 (let [r (f k v)]
-                                   (if (elide? r)
-                                     [acc true]
-                                     (let [k2 (nth r 0)
-                                           v2 (nth r 1)
-                                           changed?
-                                             (or changed?
-                                                 (not (equiv-with-meta? k2 k))
-                                                 (not (equiv-with-meta? v2 v)))]
-                                       [(assoc acc k2 v2) changed?]))))
-                               [base false]
-                               m)
-              out (if (identical? (meta m) (meta out))
-                    out
-                    (with-meta out (meta m)))]
-          (if (not changed?) m out)))))
+  ([m f path] (traverse-map m f path nil nil))
+  ([m f path loc] (traverse-map m f path loc nil))
+  ([m f path loc form]
+   (if (nil? m)
+     m
+     (do (ensure-map m path loc form)
+         (let [base (if (record? m) {} (empty m))
+               [out changed?]
+                 (reduce-kv (fn [[acc changed?] k v]
+                              (let [r (f k v)]
+                                (if (elide? r)
+                                  [acc true]
+                                  (let [k2 (nth r 0)
+                                        v2 (nth r 1)
+                                        changed?
+                                          (or changed?
+                                              (not (equiv-with-meta? k2 k))
+                                              (not (equiv-with-meta? v2 v)))]
+                                    [(assoc acc k2 v2) changed?]))))
+                            [base false]
+                            m)
+               out (if (identical? (meta m) (meta out))
+                     out
+                     (with-meta out (meta m)))]
+           (if (not changed?) m out))))))
 
 
 ;; Parsing / validation
@@ -139,19 +253,30 @@
        (or (some #(contains? m %) destructure-special-keys)
            (some destructure-entry? m))))
 
-(defn- make-bind [sym path form] {:op :bind, :sym sym, :path path, :form form})
+(defn- make-bind
+  [sym path form]
+  {:op :bind, :sym sym, :path path, :form form, :loc (form-loc form)})
 
 (defn- make-seq-elems
   [pat path form]
-  {:op :seq-elems, :pat pat, :path path, :form form})
+  {:op :seq-elems, :pat pat, :path path, :form form, :loc (form-loc form)})
 
 (defn- make-seq-destructure
   [v path form]
-  {:op :seq-destructure, :dform v, :path path, :form form})
+  {:op :seq-destructure,
+   :dform v,
+   :path path,
+   :form form,
+   :loc (form-loc form)})
 
 (defn- make-map-entries
   [kpat vpat path form]
-  {:op :map-entries, :kpat kpat, :vpat vpat, :path path, :form form})
+  {:op :map-entries,
+   :kpat kpat,
+   :vpat vpat,
+   :path path,
+   :form form,
+   :loc (form-loc form)})
 
 (defn- make-destructure
   [m path entries]
@@ -162,11 +287,12 @@
    :as (get m :as),
    :or (get m :or),
    :path path,
-   :form m})
+   :form m,
+   :loc (form-loc m)})
 
 (defn- make-step
   [pattern source path]
-  {:pattern pattern, :source source, :path path})
+  {:pattern pattern, :source source, :path path, :loc (form-loc pattern)})
 
 (defn- destructure-ctx
   [m path]
@@ -491,6 +617,8 @@
 ;; Codegen helpers
 
 (defn- node-path [pat] (:path pat))
+(defn- node-loc [pat] (:loc pat))
+(defn- node-form [pat] (:form pat))
 
 (defn- render-path
   [path]
@@ -844,7 +972,8 @@
       :form `(let [~v# ~value-expr]
                (if (nil? ~v#)
                  nil
-                 (do (ensure-map ~v# ~(node-path pat))
+                 (do (ensure-map ~v# ~(node-path pat) ~(node-loc pat)
+                                 ~(list 'quote (node-form pat)))
                      (let [~@had-bindings]
                        (let [~dform ~v#]
                          (let [~@child-bindings]
@@ -960,7 +1089,9 @@
               (traverse-seq coll#
                             (fn [~elem-sym]
                               ~(emit-pattern-value env (:pat pat) elem-sym))
-                            ~(node-path pat)))}))
+                            ~(node-path pat)
+                            ~(node-loc pat)
+                            ~(list 'quote (node-form pat))))}))
 
 (clos/defmethod emit-traversal-fn [env (pat (key= :op :map-entries))]
   (let [k-sym (gensym "k")
@@ -980,7 +1111,9 @@
                                                       v-sym
                                                       (fn [vval]
                                                         `[~kval ~vval])))))
-                            ~(node-path pat)))}))
+                            ~(node-path pat)
+                            ~(node-loc pat)
+                            ~(list 'quote (node-form pat))))}))
 
 (clos/defmethod emit-traversal-fn [_env _pat] nil)
 

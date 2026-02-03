@@ -277,6 +277,33 @@
     (is (contains? data :path))
     (is (contains? data :value))))
 
+(deftest error-message-with-hint
+  (is (thrown-with-msg?
+        clojure.lang.ExceptionInfo
+        #"Pattern type mismatch(?s).*hint: Expected a map pattern"
+        (over [{:keys [lines]} {:lines [{:sku "A"}]} {line-sku :sku} lines]
+              {line-sku line-sku}))))
+
+(deftest error-message-with-seqable-hint
+  (is (thrown-with-msg?
+        clojure.lang.ExceptionInfo
+        #"Pattern type mismatch(?s).*hint: Expected a seq pattern"
+        (over [[n] {:a 1}] {n n}))))
+
+(deftest error-message-no-bracketed-hint
+  (try (over [{:keys [lines]} {:lines [{:sku "A"}]} {line-sku :sku} lines]
+             {line-sku line-sku})
+       (is false)
+       (catch clojure.lang.ExceptionInfo e
+         (let [m (.getMessage e)]
+           (is (re-find #"hint: Expected a map pattern" m))
+           (is (nil? (re-find (re-pattern "hint: \\[") m)))))))
+
+(deftest error-message-no-hint-for-non-type-errors
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                        #"(?s)^((?!hint:).)*$"
+                        (over-plan '[{_ n} ::input] '{m 1}))))
+
 (deftest structural-sharing
   (let [data {:a 1, :b 2}
         result (over [{k v} data] {})]
@@ -488,6 +515,11 @@
     (let [data (exdata #(over [(seq [k v]) 1] {v v}))]
       (is (= :runtime (:phase data)))
       (is (= :seqable (:expected data))))))
+
+(deftest error-message-has-caret-snippet
+  (let [msg (try (over [[n] "abc"] {n n})
+                 (catch clojure.lang.ExceptionInfo e (ex-message e)))]
+    (is (re-find #"\^{2,}" msg))))
 
 (deftest conflict-errors
   (letfn [(exdata [f]
