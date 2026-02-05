@@ -1,3 +1,5 @@
+
+
 # restructure
 
 Rewrite nested Clojure data with a declared shape.
@@ -203,6 +205,20 @@ Plain Clojure is already a win when:
 
 ```bash
 clj -M:check
+```
+
+## Release (Clojars)
+
+Dependency coordinate:
+
+```clojure
+com.github.tailrecursion/restructure {:mvn/version "1.0.0"}
+```
+
+Deploy:
+
+```bash
+clj -T:build deploy
 ```
 
 ## License
